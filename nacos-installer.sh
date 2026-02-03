@@ -33,6 +33,8 @@ print_error() {
 # ============================================================================
 
 REMOTE_DOWNLOAD_URL="https://nacos.io/download/nacos-server/nacos-setup-VERSION.zip"
+# nacos-cli configuration
+NACOS_CLI_VERSION="${NACOS_CLI_VERSION:-0.0.1}"
 INSTALL_BASE_DIR="/usr/local"
 CURRENT_LINK="nacos-setup"
 BIN_DIR="/usr/local/bin"
@@ -106,7 +108,7 @@ download_file() {
     local url=$1
     local output=$2
     
-    print_info "Downloading nacos-setup from $url..."
+    print_info "Downloading from $url..."
     
     # Try curl first, then wget
     if command -v curl >/dev/null 2>&1; then
@@ -321,6 +323,153 @@ install_nacos_setup() {
 }
 
 # ============================================================================
+# nacos-cli Installation
+# ============================================================================
+
+install_nacos_cli() {
+    local version="${NACOS_CLI_VERSION}"
+
+    print_info "Preparing to install nacos-cli version $version..."
+
+    # Detect OS
+    local os=""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        os="darwin"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+        os="linux"
+    elif [[ "$OSTYPE" == "msys"* ]] || [[ "$OSTYPE" == "cygwin"* ]] || [[ "$OSTYPE" == "win32"* ]]; then
+        os="windows"
+    else
+        # Try using uname as fallback
+        local uname_os
+        uname_os=$(uname -s 2>/dev/null || echo "")
+        if [[ "$uname_os" == "Darwin" ]]; then
+            os="darwin"
+        elif [[ "$uname_os" == "Linux" ]]; then
+            os="linux"
+        elif [[ "$uname_os" == MINGW* ]] || [[ "$uname_os" == MSYS* ]] || [[ "$uname_os" == CYGWIN* ]]; then
+            os="windows"
+        else
+            print_warn "Unsupported OS for nacos-cli: $OSTYPE (uname: $uname_os)"
+            return 1
+        fi
+    fi
+
+    # Detect architecture
+    local arch=""
+    local uname_arch
+    uname_arch=$(uname -m)
+    case "$uname_arch" in
+        x86_64|amd64)
+            arch="amd64"
+            ;;
+        arm64|aarch64)
+            arch="arm64"
+            ;;
+        *)
+            print_warn "Unsupported architecture for nacos-cli: $uname_arch"
+            return 1
+            ;;
+    esac
+
+    local url="https://nacos.io/download/nacos-cli-${version}-${os}-${arch}.zip"
+    local zip_filename="nacos-cli-${version}-${os}-${arch}.zip"
+    local tmp_dir
+    tmp_dir=$(mktemp -d "/tmp/nacos-cli-install-$$.XXXXXX") || {
+        print_error "Failed to create temp directory for nacos-cli download"
+        return 1
+    }
+    local zip_file="$tmp_dir/$zip_filename"
+
+    print_info "Downloading nacos-cli from $url..."
+    if ! download_file "$url" "$zip_file"; then
+        print_error "Failed to download nacos-cli package"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # Verify downloaded file is a valid zip
+    if ! unzip -t "$zip_file" >/dev/null 2>&1; then
+        print_error "Downloaded file is corrupted or invalid"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # Extract zip file
+    print_info "Extracting nacos-cli..."
+    if ! unzip -q "$zip_file" -d "$tmp_dir"; then
+        print_error "Failed to extract zip file"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # Expected binary filename: nacos-cli-{version}-{os}-{arch} or nacos-cli-{version}-{os}-{arch}.exe
+    local expected_binary_name="nacos-cli-${version}-${os}-${arch}"
+    local expected_binary_name_exe="${expected_binary_name}.exe"
+    local binary_path
+    
+    # For Windows, prioritize .exe files; for others, prioritize files without extension
+    if [[ "$os" == "windows" ]]; then
+        # Try .exe first for Windows
+        binary_path=$(find "$tmp_dir" -name "$expected_binary_name_exe" -type f | head -1)
+        # Fallback to non-.exe (shouldn't happen, but just in case)
+        if [ -z "$binary_path" ]; then
+            binary_path=$(find "$tmp_dir" -name "$expected_binary_name" -type f | head -1)
+        fi
+    else
+        # For non-Windows, try without .exe first
+        binary_path=$(find "$tmp_dir" -name "$expected_binary_name" -type f | head -1)
+        # Fallback to .exe (shouldn't happen, but just in case)
+        if [ -z "$binary_path" ]; then
+            binary_path=$(find "$tmp_dir" -name "$expected_binary_name_exe" -type f | head -1)
+        fi
+    fi
+
+    if [ -z "$binary_path" ] || [ ! -f "$binary_path" ]; then
+        local expected_names="$expected_binary_name"
+        if [[ "$os" == "windows" ]]; then
+            expected_names="$expected_binary_name_exe (or $expected_binary_name)"
+        else
+            expected_names="$expected_binary_name (or $expected_binary_name_exe)"
+        fi
+        print_error "Binary file not found in package. Expected: $expected_names"
+        print_info "Available files in package:"
+        find "$tmp_dir" -type f | sed 's|^|  |'
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # Ensure bin dir exists
+    mkdir -p "$BIN_DIR"
+
+    # Determine target binary name (add .exe for Windows)
+    local target_binary_name="nacos-cli"
+    if [[ "$os" == "windows" ]]; then
+        target_binary_name="nacos-cli.exe"
+    fi
+
+    # Install binary
+    if ! cp "$binary_path" "$BIN_DIR/$target_binary_name"; then
+        print_error "Failed to copy nacos-cli to $BIN_DIR (permission denied?)"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # Set executable permission (not needed on Windows, but harmless)
+    if ! chmod +x "$BIN_DIR/$target_binary_name" 2>/dev/null; then
+        # On Windows, chmod might fail, which is fine
+        if [[ "$os" != "windows" ]]; then
+            print_warn "Failed to mark nacos-cli as executable: $BIN_DIR/$target_binary_name"
+        fi
+    fi
+
+    # Cleanup
+    rm -rf "$tmp_dir"
+
+    print_success "nacos-cli $version installed to $BIN_DIR/$target_binary_name"
+}
+
+# ============================================================================
 # Verification
 # ============================================================================
 
@@ -517,6 +666,17 @@ main() {
             fi
         else
             print_info "Skipping Nacos installation. You can run: $SCRIPT_NAME -v $detected_default_version"
+        fi
+
+        # After Nacos installation, offer to install nacos-cli
+        echo ""
+        local cli_version="${NACOS_CLI_VERSION}"
+        read -p "Do you want to install nacos-cli ${cli_version} now? (Y/n): " -r REPLY_CLI
+        echo ""
+        if [[ "$REPLY_CLI" =~ ^[Yy]?$ ]] || [[ -z "$REPLY_CLI" ]]; then
+            install_nacos_cli
+        else
+            print_info "Skipping nacos-cli installation. You can install it later by re-running this installer."
         fi
 
         exit 0
