@@ -1,0 +1,18 @@
+# Ignore temporary test directory
+tmp-test/
+
+# Distribution artifacts
+dist/
+
+# Backup and editor files
+*.backup
+*.bak
+.DS_Store
+*.swp
+
+# IDEs
+.vscode/
+.idea/
+
+# local caches
+.nacos/

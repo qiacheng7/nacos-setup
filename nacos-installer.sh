@@ -33,7 +33,8 @@ print_error() {
 # ============================================================================
 
 REMOTE_DOWNLOAD_URL="https://nacos.io/download/nacos-server/nacos-setup-VERSION.zip"
-INSTALL_DIR="/usr/local/nacos-setup"
+INSTALL_BASE_DIR="/usr/local"
+CURRENT_LINK="nacos-setup"
 BIN_DIR="/usr/local/bin"
 SCRIPT_NAME="nacos-setup"
 TEMP_DIR="/tmp/nacos-setup-install-$$"
@@ -87,9 +88,9 @@ check_requirements() {
         fi
     fi
     
-    # Check if we have write permission to install directory
-    if [ ! -w "$(dirname "$INSTALL_DIR")" ]; then
-        print_warn "No write permission to $(dirname "$INSTALL_DIR")"
+    # Check if we have write permission to base install directory
+    if [ ! -w "$INSTALL_BASE_DIR" ]; then
+        print_warn "No write permission to $INSTALL_BASE_DIR"
         print_warn "You may need to run with sudo"
         return 1
     fi
@@ -189,6 +190,7 @@ install_nacos_setup() {
     
     local extracted_dir=""
     local setup_version=""
+    local INSTALL_DIR=""
     
     if [ "$INSTALL_MODE" = "local" ]; then
         # Local installation mode
@@ -208,6 +210,7 @@ install_nacos_setup() {
         
         print_info "Detected version: $setup_version"
         extracted_dir="$SCRIPT_DIR"
+        INSTALL_DIR="$INSTALL_BASE_DIR/${CURRENT_LINK}-$setup_version"
         
     else
         # Remote installation mode
@@ -263,7 +266,10 @@ install_nacos_setup() {
         exit 1
     fi
     
-    # Remove old installation if exists
+    # Prepare versioned installation directory
+    INSTALL_DIR="$INSTALL_BASE_DIR/${CURRENT_LINK}-$setup_version"
+
+    # Remove old installation for this version if exists
     if [ -d "$INSTALL_DIR" ]; then
         print_info "Removing old installation..."
         rm -rf "$INSTALL_DIR"
@@ -286,13 +292,18 @@ install_nacos_setup() {
     # Make all lib scripts executable
     chmod +x "$INSTALL_DIR/lib"/*.sh
     
-    # Create symlink in /usr/local/bin
+    # Create or update current symlink and global command
+    print_info "Updating active version symlink: $INSTALL_BASE_DIR/$CURRENT_LINK -> nacos-setup-$setup_version"
+    if [ -L "$INSTALL_BASE_DIR/$CURRENT_LINK" ] || [ -e "$INSTALL_BASE_DIR/$CURRENT_LINK" ]; then
+        rm -f "$INSTALL_BASE_DIR/$CURRENT_LINK"
+    fi
+    ln -s "nacos-setup-$setup_version" "$INSTALL_BASE_DIR/$CURRENT_LINK"
+
     print_info "Creating global command..."
     if [ -L "$BIN_DIR/$SCRIPT_NAME" ] || [ -f "$BIN_DIR/$SCRIPT_NAME" ]; then
         rm -f "$BIN_DIR/$SCRIPT_NAME"
     fi
-    
-    ln -s "$INSTALL_DIR/bin/$SCRIPT_NAME" "$BIN_DIR/$SCRIPT_NAME"
+    ln -s "$INSTALL_BASE_DIR/$CURRENT_LINK/bin/$SCRIPT_NAME" "$BIN_DIR/$SCRIPT_NAME"
     
     # Cleanup temporary directory (only for remote mode)
     if [ "$INSTALL_MODE" = "remote" ]; then
@@ -343,13 +354,17 @@ verify_installation() {
 
 print_usage_info() {
     local version="${INSTALLED_VERSION:-unknown}"
-    
+    local install_location="unknown"
+    if [ -L "$INSTALL_BASE_DIR/$CURRENT_LINK" ]; then
+        install_location="$INSTALL_BASE_DIR/$(readlink "$INSTALL_BASE_DIR/$CURRENT_LINK")"
+    fi
+
     echo "========================================"
     echo "  Nacos Setup Installation Complete"
     echo "========================================"
     echo ""
     echo "Version: $version"
-    echo "Installation location: $INSTALL_DIR"
+    echo "Installation location: $install_location"
     echo "Global command: $SCRIPT_NAME"
     echo ""
     echo "Quick Start:"
@@ -376,15 +391,20 @@ print_usage_info() {
 # ============================================================================
 
 check_installed_version() {
-    if [ -f "$INSTALL_DIR/.version" ]; then
-        local version=$(cat "$INSTALL_DIR/.version")
-        print_info "Installed nacos-setup version: $version"
-        print_info "Installation location: $INSTALL_DIR"
-        return 0
-    else
-        print_warn "nacos-setup is not installed or version information not found"
-        return 1
+    # Read active version from current symlink
+    if [ -L "$INSTALL_BASE_DIR/$CURRENT_LINK" ]; then
+        local target=$(readlink "$INSTALL_BASE_DIR/$CURRENT_LINK")
+        local active_dir="$INSTALL_BASE_DIR/$target"
+        if [ -f "$active_dir/.version" ]; then
+            local version=$(cat "$active_dir/.version")
+            print_info "Installed nacos-setup version: $version"
+            print_info "Installation location: $active_dir"
+            return 0
+        fi
     fi
+
+    print_warn "nacos-setup is not installed or version information not found"
+    return 1
 }
 
 # ============================================================================
@@ -392,20 +412,30 @@ check_installed_version() {
 # ============================================================================
 
 uninstall_nacos_setup() {
-    print_info "Uninstalling nacos-setup..."
-    
-    # Remove installation directory
-    if [ -d "$INSTALL_DIR" ]; then
-        rm -rf "$INSTALL_DIR"
-        print_success "Removed $INSTALL_DIR"
+    print_info "Uninstalling nacos-setup (active version)..."
+
+    # If current symlink exists, remove the target directory
+    if [ -L "$INSTALL_BASE_DIR/$CURRENT_LINK" ]; then
+        local target=$(readlink "$INSTALL_BASE_DIR/$CURRENT_LINK")
+        local target_dir="$INSTALL_BASE_DIR/$target"
+        if [ -d "$target_dir" ]; then
+            rm -rf "$target_dir"
+            print_success "Removed $target_dir"
+        fi
+
+        # Remove current symlink
+        rm -f "$INSTALL_BASE_DIR/$CURRENT_LINK"
+        print_success "Removed $INSTALL_BASE_DIR/$CURRENT_LINK"
+    else
+        print_warn "No active installation found at $INSTALL_BASE_DIR/$CURRENT_LINK"
     fi
-    
-    # Remove symlink
+
+    # Remove global command
     if [ -L "$BIN_DIR/$SCRIPT_NAME" ] || [ -f "$BIN_DIR/$SCRIPT_NAME" ]; then
         rm -f "$BIN_DIR/$SCRIPT_NAME"
         print_success "Removed $BIN_DIR/$SCRIPT_NAME"
     fi
-    
+
     print_success "Uninstallation completed!"
     echo ""
 }
@@ -461,6 +491,34 @@ main() {
     # Verify
     if verify_installation; then
         print_usage_info
+
+        # After successful installer setup, offer to install Nacos (default version)
+        echo ""
+        # Try to detect default Nacos version from installed script
+        detected_default_version="3.1.1"
+        installed_script="$INSTALL_BASE_DIR/$CURRENT_LINK/bin/$SCRIPT_NAME"
+        if [ -f "$installed_script" ]; then
+            v=$(sed -n 's/^DEFAULT_VERSION="\(.*\)"/\1/p' "$installed_script" || true)
+            if [ -n "$v" ]; then
+                detected_default_version="$v"
+            fi
+        fi
+
+        read -p "Do you want to install Nacos $detected_default_version now? (Y/n): " -r REPLY
+        echo ""
+        if [[ "$REPLY" =~ ^[Yy]?$ ]] || [[ -z "$REPLY" ]]; then
+            print_info "Installing Nacos $detected_default_version..."
+            # Use the installed global command to perform the Nacos installation
+            if command -v "$SCRIPT_NAME" >/dev/null 2>&1; then
+                "$SCRIPT_NAME" -v "$detected_default_version"
+            else
+                # fallback to calling script via BIN_DIR
+                "$BIN_DIR/$SCRIPT_NAME" -v "$detected_default_version"
+            fi
+        else
+            print_info "Skipping Nacos installation. You can run: $SCRIPT_NAME -v $detected_default_version"
+        fi
+
         exit 0
     else
         print_error "Installation verification failed"
