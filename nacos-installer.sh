@@ -33,6 +33,8 @@ print_error() {
 # ============================================================================
 
 REMOTE_DOWNLOAD_URL="https://nacos.io/download/nacos-server/nacos-setup-VERSION.zip"
+# nacos-cli configuration
+NACOS_CLI_VERSION="${NACOS_CLI_VERSION:-1.0.0}"
 INSTALL_BASE_DIR="/usr/local"
 CURRENT_LINK="nacos-setup"
 BIN_DIR="/usr/local/bin"
@@ -106,7 +108,7 @@ download_file() {
     local url=$1
     local output=$2
     
-    print_info "Downloading nacos-setup from $url..."
+    print_info "Downloading from $url..."
     
     # Try curl first, then wget
     if command -v curl >/dev/null 2>&1; then
@@ -321,6 +323,73 @@ install_nacos_setup() {
 }
 
 # ============================================================================
+# nacos-cli Installation
+# ============================================================================
+
+install_nacos_cli() {
+    local version="${NACOS_CLI_VERSION}"
+
+    print_info "Preparing to install nacos-cli version $version..."
+
+    # Detect OS
+    local os=""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        os="darwin"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux"* ]]; then
+        os="linux"
+    else
+        print_warn "Unsupported OS for nacos-cli: $OSTYPE"
+        return 1
+    fi
+
+    # Detect architecture
+    local arch=""
+    local uname_arch
+    uname_arch=$(uname -m)
+    case "$uname_arch" in
+        x86_64|amd64)
+            arch="amd64"
+            ;;
+        arm64|aarch64)
+            arch="arm64"
+            ;;
+        *)
+            print_warn "Unsupported architecture for nacos-cli: $uname_arch"
+            return 1
+            ;;
+    esac
+
+    local url="https://nacos.io/download/nacos-cli-${version}-${os}-${arch}"
+    local tmp_file
+    tmp_file=$(mktemp "/tmp/nacos-cli-${version}-${os}-${arch}.XXXXXX") || {
+        print_error "Failed to create temp file for nacos-cli download"
+        return 1
+    }
+
+    print_info "Downloading nacos-cli from $url..."
+    if ! download_file "$url" "$tmp_file"; then
+        print_error "Failed to download nacos-cli binary"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    # Ensure bin dir exists
+    mkdir -p "$BIN_DIR"
+
+    if ! mv "$tmp_file" "$BIN_DIR/nacos-cli"; then
+        print_error "Failed to move nacos-cli to $BIN_DIR (permission denied?)"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    if ! chmod +x "$BIN_DIR/nacos-cli"; then
+        print_warn "Failed to mark nacos-cli as executable: $BIN_DIR/nacos-cli"
+    fi
+
+    print_success "nacos-cli $version installed to $BIN_DIR/nacos-cli"
+}
+
+# ============================================================================
 # Verification
 # ============================================================================
 
@@ -517,6 +586,17 @@ main() {
             fi
         else
             print_info "Skipping Nacos installation. You can run: $SCRIPT_NAME -v $detected_default_version"
+        fi
+
+        # After Nacos installation, offer to install nacos-cli
+        echo ""
+        local cli_version="${NACOS_CLI_VERSION}"
+        read -p "Do you want to install nacos-cli ${cli_version} now? (Y/n): " -r REPLY_CLI
+        echo ""
+        if [[ "$REPLY_CLI" =~ ^[Yy]?$ ]] || [[ -z "$REPLY_CLI" ]]; then
+            install_nacos_cli
+        else
+            print_info "Skipping nacos-cli installation. You can install it later by re-running this installer."
         fi
 
         exit 0
