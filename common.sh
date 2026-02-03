@@ -1,0 +1,295 @@
+#!/bin/bash
+
+# Copyright 1999-2025 Alibaba Group Holding Ltd.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Common Utilities Library
+# Shared functions used by both standalone and cluster modes
+
+# ============================================================================
+# Color Output
+# ============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+print_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# ============================================================================
+# Version Comparison
+# ============================================================================
+
+# Compare version numbers (returns 0 if v1 >= v2, 1 otherwise)
+version_ge() {
+    local v1=$1
+    local v2=$2
+    
+    # Split versions into arrays
+    IFS='.' read -ra V1 <<< "$v1"
+    IFS='.' read -ra V2 <<< "$v2"
+    
+    # Compare each component
+    for i in 0 1 2; do
+        local num1=${V1[$i]:-0}
+        local num2=${V2[$i]:-0}
+        
+        if [ "$num1" -gt "$num2" ]; then
+            return 0  # v1 > v2
+        elif [ "$num1" -lt "$num2" ]; then
+            return 1  # v1 < v2
+        fi
+        # If equal, continue to next component
+    done
+    
+    return 0  # v1 == v2
+}
+
+# ============================================================================
+# Security Key Generation
+# ============================================================================
+
+# Generate secret key (Base64 encoded random string)
+generate_secret_key() {
+    openssl rand -base64 32 2>/dev/null || echo "U2VjdXJlUmFuZG9tS2V5Rm9yTmFjb3NBdXRoVG9rZW4xMjM0NTY3ODkw"
+}
+
+# Generate password (alphanumeric, 12-16 characters)
+generate_password() {
+    local password=$(openssl rand -base64 12 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c 12)
+    if [ -z "$password" ]; then
+        password="Nacos$(date +%s | tail -c 6)"
+    fi
+    echo "$password"
+}
+
+# ============================================================================
+# OS Detection
+# ============================================================================
+
+detect_os_arch() {
+    local os_type="unknown"
+    
+    case "$(uname -s)" in
+        Linux*)
+            os_type="linux"
+            ;;
+        Darwin*)
+            os_type="macos"
+            ;;
+        CYGWIN*|MINGW*|MSYS*)
+            os_type="windows"
+            ;;
+    esac
+    
+    echo "$os_type"
+}
+
+# ============================================================================
+# IP Address Detection
+# ============================================================================
+
+# Get first non-localhost IP address
+get_local_ip() {
+    local ip=""
+    local os_type=$(detect_os_arch)
+    
+    case "$os_type" in
+        macos)
+            ip=$(ifconfig | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | head -1)
+            ;;
+        linux)
+            if command -v ip &> /dev/null; then
+                ip=$(ip -4 addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | head -1)
+            elif command -v ifconfig &> /dev/null; then
+                ip=$(ifconfig | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | head -1)
+            fi
+            ;;
+        *)
+            if command -v ifconfig &> /dev/null; then
+                ip=$(ifconfig | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | head -1)
+            fi
+            ;;
+    esac
+    
+    # Fallback to 127.0.0.1 if no IP found
+    if [ -z "$ip" ]; then
+        ip="127.0.0.1"
+        print_warn "Could not detect non-localhost IP, using 127.0.0.1" >&2
+    fi
+    
+    echo "$ip"
+}
+
+# ============================================================================
+# Java Detection
+# ============================================================================
+
+# Get Java version from java command
+get_java_version() {
+    local java_cmd=$1
+    # Use sed for cross-platform compatibility
+    local version=$($java_cmd -version 2>&1 | head -1 | sed -n 's/.*version "\([0-9]*\).*/\1/p')
+    
+    # Handle Java version format like "1.8.0" -> extract "8"
+    if [ -z "$version" ]; then
+        version=$($java_cmd -version 2>&1 | head -1 | sed -n 's/.*version "1\.\([0-9]*\).*/\1/p')
+    fi
+    
+    echo "${version:-0}"
+}
+
+# Get Java search paths based on OS
+get_java_search_paths() {
+    local os_type=$1
+    local paths=()
+    
+    case "$os_type" in
+        linux)
+            paths=(
+                "/usr/lib/jvm"
+                "/usr/java"
+                "/opt/java"
+                "/opt/jdk"
+                "$HOME/.sdkman/candidates/java"
+                "$HOME/.jenv/versions"
+            )
+            ;;
+        macos)
+            paths=(
+                "/Library/Java/JavaVirtualMachines"
+                "/System/Library/Frameworks/JavaVM.framework"
+                "$HOME/.sdkman/candidates/java"
+                "$HOME/.jenv/versions"
+            )
+            ;;
+        windows)
+            paths=(
+                "/c/Program Files/Java"
+                "/c/Program Files/OpenJDK"
+                "$HOME/.sdkman/candidates/java"
+            )
+            ;;
+        *)
+            paths=(
+                "/usr/lib/jvm"
+                "/usr/java"
+                "/opt/java"
+                "/Library/Java/JavaVirtualMachines"
+            )
+            ;;
+    esac
+    
+    printf '%s\n' "${paths[@]}"
+}
+
+# ============================================================================
+# Configuration Management
+# ============================================================================
+
+# Update or add a property in configuration file
+update_config_property() {
+    local config_file=$1
+    local property_key=$2
+    local property_value=$3
+    
+    if [ ! -f "$config_file" ]; then
+        echo "[ERROR] Config file does not exist: $config_file" >&2
+        return 1
+    fi
+    
+    if grep -q "^${property_key}=" "$config_file" 2>/dev/null; then
+        sed -i.bak "s|^${property_key}=.*|${property_key}=${property_value}|" "$config_file"
+    elif grep -q "^#${property_key}=" "$config_file" 2>/dev/null; then
+        sed -i.bak "s|^#${property_key}=.*|${property_key}=${property_value}|" "$config_file"
+    else
+        # Ensure file ends with newline before appending
+        if [ -s "$config_file" ] && [ "$(tail -c 1 "$config_file" | wc -l)" -eq 0 ]; then
+            echo "" >> "$config_file"
+        fi
+        echo "${property_key}=${property_value}" >> "$config_file"
+    fi
+}
+
+# ============================================================================
+# System Commands Check
+# ============================================================================
+
+check_system_commands() {
+    print_info "Checking required system commands..."
+    
+    local missing_commands=()
+    local optional_missing=()
+    
+    # Essential commands
+    local required_commands=("curl" "unzip" "grep" "sed")
+    
+    # Optional commands
+    local optional_commands=("lsof" "ps" "kill")
+    
+    # Check required commands
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v $cmd &> /dev/null; then
+            missing_commands+=("$cmd")
+        fi
+    done
+    
+    # Check optional commands
+    for cmd in "${optional_commands[@]}"; do
+        if ! command -v $cmd &> /dev/null; then
+            optional_missing+=("$cmd")
+        fi
+    done
+    
+    # Report missing required commands
+    if [ ${#missing_commands[@]} -gt 0 ]; then
+        print_error "Missing required commands: ${missing_commands[*]}"
+        echo ""
+        print_info "Please install them first"
+        
+        local os_type=$(detect_os_arch)
+        case "$os_type" in
+            linux)
+                print_info "Ubuntu/Debian: sudo apt-get install -y ${missing_commands[*]}"
+                print_info "CentOS/RHEL: sudo yum install -y ${missing_commands[*]}"
+                ;;
+            macos)
+                print_info "macOS: brew install ${missing_commands[*]}"
+                ;;
+        esac
+        
+        echo ""
+        return 1
+    fi
+    
+    # Warn about missing optional commands
+    if [ ${#optional_missing[@]} -gt 0 ]; then
+        print_warn "Optional commands not found: ${optional_missing[*]}"
+        print_info "Some features may be limited (port detection, process management)"
+        echo ""
+    fi
+    
+    print_info "All required commands are available"
+    return 0
+}
