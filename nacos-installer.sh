@@ -34,7 +34,7 @@ print_error() {
 
 REMOTE_DOWNLOAD_URL="https://nacos.io/download/nacos-server/nacos-setup-VERSION.zip"
 # nacos-cli configuration
-NACOS_CLI_VERSION="${NACOS_CLI_VERSION:-1.0.0}"
+NACOS_CLI_VERSION="${NACOS_CLI_VERSION:-0.0.1}"
 INSTALL_BASE_DIR="/usr/local"
 CURRENT_LINK="nacos-setup"
 BIN_DIR="/usr/local/bin"
