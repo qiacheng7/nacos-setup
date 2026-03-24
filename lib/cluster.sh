@@ -24,6 +24,10 @@ source "$SCRIPT_DIR/download.sh"
 source "$SCRIPT_DIR/config_manager.sh"
 source "$SCRIPT_DIR/java_manager.sh"
 source "$SCRIPT_DIR/process_manager.sh"
+if [ -f "$SCRIPT_DIR/skill_scanner_install.sh" ]; then
+    # shellcheck source=skill_scanner_install.sh
+    source "$SCRIPT_DIR/skill_scanner_install.sh"
+fi
 
 # ============================================================================
 # Global Variables
@@ -308,6 +312,15 @@ create_cluster() {
     cat "$cluster_conf" | while read line; do
         echo "  $line"
     done
+    echo ""
+
+    print_info "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
+    echo "[nacos-setup/skill-scanner] cluster: post-config reached (VERSION=${VERSION})" >&2
+    if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
+        run_post_nacos_config_skill_scanner_hook
+    else
+        echo "[nacos-setup/skill-scanner] ERROR: run_post_nacos_config_skill_scanner_hook missing; add lib/skill_scanner_install.sh to $SCRIPT_DIR" >&2
+    fi
     echo ""
     
     # Start all nodes
@@ -654,6 +667,15 @@ join_cluster() {
     
     rm -f "$config_file.bak"
     print_info "Node configured: main=$new_main_port, console=$new_console_port"
+    echo ""
+
+    print_info "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
+    echo "[nacos-setup/skill-scanner] cluster join: post-config reached (VERSION=${VERSION})" >&2
+    if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
+        run_post_nacos_config_skill_scanner_hook
+    else
+        echo "[nacos-setup/skill-scanner] ERROR: run_post_nacos_config_skill_scanner_hook missing; add lib/skill_scanner_install.sh to $SCRIPT_DIR" >&2
+    fi
     echo ""
     
     # Update cluster.conf in existing nodes

@@ -435,6 +435,26 @@ validate_arguments() {
 }
 
 # ============================================================================
+# Skill-scanner post-install hook (lib/skill_scanner_install.sh)
+# Called from standalone/cluster after Nacos config is written. Pre-load here so
+# post_nacos_config_hook exists even if a partial/older lib omits the call path.
+# ============================================================================
+
+setup_skill_scanner_hook_for_nacos_install() {
+    if [ -f "$LIB_DIR/skill_scanner_install.sh" ]; then
+        # shellcheck source=lib/skill_scanner_install.sh
+        source "$LIB_DIR/skill_scanner_install.sh"
+    fi
+    post_nacos_config_hook() {
+        if declare -F maybe_install_skill_scanner_for_nacos >/dev/null 2>&1; then
+            maybe_install_skill_scanner_for_nacos "$VERSION"
+        else
+            echo "[nacos-setup/skill-scanner] skipped: missing $LIB_DIR/skill_scanner_install.sh (reinstall or copy from nacos-setup source tree)" >&2
+        fi
+    }
+}
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 
@@ -488,6 +508,8 @@ main() {
     
     # Disable set -e for mode execution (they handle errors internally)
     set +e
+
+    setup_skill_scanner_hook_for_nacos_install
     
     # Route to appropriate mode
     case "$MODE" in

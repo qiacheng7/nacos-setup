@@ -24,6 +24,10 @@ source "$SCRIPT_DIR/download.sh"
 source "$SCRIPT_DIR/config_manager.sh"
 source "$SCRIPT_DIR/java_manager.sh"
 source "$SCRIPT_DIR/process_manager.sh"
+if [ -f "$SCRIPT_DIR/skill_scanner_install.sh" ]; then
+    # shellcheck source=skill_scanner_install.sh
+    source "$SCRIPT_DIR/skill_scanner_install.sh"
+fi
 
 # ============================================================================
 # Global Variables for Standalone Mode
@@ -169,6 +173,16 @@ run_standalone_mode() {
     
     rm -f "$config_file.bak"
     print_info "Configuration completed"
+    echo ""
+
+    # stdout + stderr: some installs only surface [INFO]; stderr traces still go to skill_scanner_install.sh
+    print_info "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
+    echo "[nacos-setup/skill-scanner] standalone: post-config reached (VERSION=${VERSION})" >&2
+    if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
+        run_post_nacos_config_skill_scanner_hook
+    else
+        echo "[nacos-setup/skill-scanner] ERROR: run_post_nacos_config_skill_scanner_hook missing; add lib/skill_scanner_install.sh to $SCRIPT_DIR" >&2
+    fi
     echo ""
     
     # Start Nacos if auto-start is enabled
