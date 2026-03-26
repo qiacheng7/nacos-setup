@@ -136,7 +136,12 @@ start_nacos_process() {
     if [ -n "$java_opts" ]; then
         export JAVA_OPT="$java_opts"
     fi
-    
+
+    # Ensure startup uses the validated Java from check_java_requirements.
+    if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME}/bin/java" ]; then
+        export PATH="${JAVA_HOME}/bin:${PATH}"
+    fi
+
     # Start Nacos
     if [ "$use_derby" = true ] && [ "$mode" = "cluster" ]; then
         bash "$install_dir/bin/startup.sh" -m "$mode" -p embedded >/dev/null 2>&1

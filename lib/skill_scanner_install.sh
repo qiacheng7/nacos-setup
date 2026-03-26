@@ -5,13 +5,14 @@
 # you may not use this file except in compliance with the License.
 
 # Optional Cisco skill-scanner (https://github.com/cisco-ai-defense/skill-scanner)
-# PyPI: cisco-ai-skill-scanner — requires Python 3.10+ and uv (recommended) or pip.
-# When invoked via "sudo nacos-setup", Python/uv/pip are resolved in SUDO_USER's
+# PyPI: cisco-ai-skill-scanner — requires Python 3.10+ and uv.
+# When invoked via "sudo nacos-setup", Python/uv are resolved in SUDO_USER's
 # environment (same as running without sudo), so Homebrew/user installs are visible.
 
 SKILL_SCANNER_PYPI_PACKAGE="cisco-ai-skill-scanner"
 MIN_NACOS_VERSION_FOR_SKILL_SCANNER="3.2.0"
 _SKILL_SCANNER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_SCANNER_VENV_PATH_RELATIVE="ai-infra/.venv"
 
 # Always write to stderr (no ANSI); survives logging pipelines and makes sudo/root issues obvious.
 _skill_scanner_trace() { printf '%s\n' "[nacos-setup/skill-scanner] $*" >&2; }
@@ -119,25 +120,79 @@ _find_python_310_plus() {
     echo "$out" | tail -n 1
 }
 
-_skill_scanner_already_installed() {
-    local py_exe=$1
-    if _skill_scanner_runas_target_user bash -c 'command -v skill-scanner >/dev/null 2>&1'; then
+_ensure_python_310_plus_with_uv() {
+    local py_exe=$(_find_python_310_plus || true)
+    if [ -n "$py_exe" ]; then
+        printf '%s\n' "$py_exe"
         return 0
     fi
-    if _skill_scanner_runas_target_user "$py_exe" -m pip show "$SKILL_SCANNER_PYPI_PACKAGE" >/dev/null 2>&1; then
+
+    # Fallback: rely on uv-managed Python even if system Python is unavailable.
+    if _skill_scanner_runas_target_user uv python install 3.10 >/dev/null 2>&1; then
+        py_exe=$(_skill_scanner_runas_target_user uv python find 3.10 2>/dev/null || true)
+    fi
+
+    if [ -n "$py_exe" ] && _skill_scanner_runas_target_user "$py_exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+        printf '%s\n' "$py_exe"
         return 0
     fi
+
     return 1
 }
 
-_install_skill_scanner_uv() {
-    local py_exe=$1
-    _skill_scanner_runas_target_user uv pip install --python "$py_exe" "$SKILL_SCANNER_PYPI_PACKAGE"
+_skill_scanner_venv_dir_for_user() {
+    _skill_scanner_runas_target_user bash -c 'printf "%s/%s\n" "$HOME" "'"$SKILL_SCANNER_VENV_PATH_RELATIVE"'"'
 }
 
-_install_skill_scanner_pip() {
+_create_skill_scanner_venv_with_uv() {
     local py_exe=$1
-    _skill_scanner_runas_target_user "$py_exe" -m pip install --user "$SKILL_SCANNER_PYPI_PACKAGE"
+    local venv_dir=$2
+    _skill_scanner_runas_target_user uv venv --python "$py_exe" "$venv_dir"
+}
+
+_install_skill_scanner_uv_in_venv() {
+    local venv_python=$1
+    _skill_scanner_runas_target_user uv pip install --python "$venv_python" "$SKILL_SCANNER_PYPI_PACKAGE"
+}
+
+_skill_scanner_ensure_venv_bin_in_path() {
+    local venv_dir=$1
+    local venv_bin="${venv_dir}/bin"
+    local export_line="export PATH=\"${venv_bin}:\$PATH\""
+
+    # Current process PATH (helps immediate invocation in this script run).
+    case ":$PATH:" in
+        *":${venv_bin}:"*) ;;
+        *) export PATH="${venv_bin}:$PATH" ;;
+    esac
+
+    # Persist for common shells of target user (idempotent).
+    _skill_scanner_runas_target_user bash -c '
+        set -e
+        line="$1"
+        shift
+        for rc in "$@"; do
+            [ -f "$rc" ] || touch "$rc"
+            grep -Fqx "$line" "$rc" || printf "\n%s\n" "$line" >> "$rc"
+        done
+    ' _ "$export_line" "$HOME/.zshrc" "$HOME/.bashrc" || return 1
+}
+
+_skill_scanner_installed_in_venv() {
+    local venv_python=$1
+    _skill_scanner_runas_target_user "$venv_python" -m pip show "$SKILL_SCANNER_PYPI_PACKAGE" >/dev/null 2>&1
+}
+
+_confirm_skill_scanner_install() {
+    # Force explicit user confirmation and avoid blocking in non-interactive contexts.
+    if [ ! -t 0 ]; then
+        print_warn "skill-scanner is not installed and interactive confirmation is unavailable (non-interactive shell). Skipping installation."
+        return 1
+    fi
+
+    local confirm
+    read -r -p "Install Cisco skill-scanner into ~/ai-infra/.venv now? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]]
 }
 
 _skill_scanner_ensure_version_ge() {
@@ -183,44 +238,58 @@ maybe_install_skill_scanner_for_nacos() {
 
     print_info "Nacos ${nacos_version} >= ${MIN_NACOS_VERSION_FOR_SKILL_SCANNER}: checking Cisco skill-scanner (${SKILL_SCANNER_PYPI_PACKAGE})..."
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-        print_info "sudo detected: using user ${SUDO_USER}'s environment for Python / pip / uv (root often lacks Homebrew Python)."
+        print_info "sudo detected: using user ${SUDO_USER}'s environment for Python / uv (root often lacks Homebrew Python)."
+    fi
+
+    if ! _skill_scanner_runas_target_user bash -c 'command -v uv >/dev/null 2>&1'; then
+        print_warn "No uv environment detected. Cannot install ${SKILL_SCANNER_PYPI_PACKAGE}."
+        print_warn "Please install uv first: https://docs.astral.sh/uv/getting-started/installation/"
+        return 0
     fi
 
     local py_exe
-    py_exe=$(_find_python_310_plus) || {
-        print_warn "skill-scanner needs Python 3.10+ on PATH for your user. Install Python 3.10+ with pip or uv, then: pip install --user ${SKILL_SCANNER_PYPI_PACKAGE}"
-        print_warn "Reference: https://github.com/cisco-ai-defense/skill-scanner"
+    py_exe=$(_ensure_python_310_plus_with_uv) || {
+        print_warn "Could not prepare Python 3.10+ with uv. Please install Python 3.10+ and retry."
+        print_warn "Reference: https://docs.astral.sh/uv/guides/install-python/"
         return 0
     }
 
-    if _skill_scanner_already_installed "$py_exe"; then
-        print_info "skill-scanner already installed (skip)."
+    local venv_dir
+    venv_dir=$(_skill_scanner_venv_dir_for_user)
+    local venv_python="${venv_dir}/bin/python"
+
+    if [ -x "$venv_python" ] && _skill_scanner_installed_in_venv "$venv_python"; then
+        print_info "skill-scanner already installed in ${venv_dir} (skip)."
         return 0
     fi
 
-    if ! _skill_scanner_runas_target_user bash -c 'command -v uv >/dev/null 2>&1' \
-        && ! _skill_scanner_runas_target_user "$py_exe" -m pip --version >/dev/null 2>&1; then
-        print_warn "Neither uv nor pip is available for Python at ${py_exe}. Install uv or pip for Python 3.10+."
+    if ! _confirm_skill_scanner_install; then
+        print_info "Skip installing ${SKILL_SCANNER_PYPI_PACKAGE} (not confirmed)."
         return 0
     fi
 
-    if _skill_scanner_runas_target_user bash -c 'command -v uv >/dev/null 2>&1'; then
-        print_info "Installing ${SKILL_SCANNER_PYPI_PACKAGE} with uv..."
-        if _install_skill_scanner_uv "$py_exe"; then
-            print_info "Installed ${SKILL_SCANNER_PYPI_PACKAGE} via uv."
+    if [ ! -x "$venv_python" ]; then
+        print_info "Creating uv virtual environment in ${venv_dir}..."
+        if ! _create_skill_scanner_venv_with_uv "$py_exe" "$venv_dir"; then
+            print_warn "Could not create uv virtual environment at ${venv_dir}."
+            print_warn "Docs: https://docs.astral.sh/uv/"
             return 0
         fi
-        print_warn "uv install failed, trying pip..."
     fi
 
-    print_info "Installing ${SKILL_SCANNER_PYPI_PACKAGE} with pip..."
-    if _install_skill_scanner_pip "$py_exe"; then
-        print_info "Installed ${SKILL_SCANNER_PYPI_PACKAGE} via pip."
-        print_info "If skill-scanner is not in PATH, add ~/.local/bin or run: ${py_exe} -m skill_scanner"
+    print_info "Installing ${SKILL_SCANNER_PYPI_PACKAGE} into ${venv_dir} via uv..."
+    if _install_skill_scanner_uv_in_venv "$venv_python"; then
+        if _skill_scanner_ensure_venv_bin_in_path "$venv_dir"; then
+            print_info "Added ${venv_dir}/bin to PATH (current session and shell rc files)."
+        else
+            print_warn "Installed successfully, but failed to persist PATH update. Please add ${venv_dir}/bin to PATH manually."
+        fi
+        print_info "Installed ${SKILL_SCANNER_PYPI_PACKAGE} in ${venv_dir}."
+        print_info "Run with: ${venv_dir}/bin/skill-scanner"
         return 0
     fi
 
-    print_warn "Could not install ${SKILL_SCANNER_PYPI_PACKAGE}. Install manually: pip install --user ${SKILL_SCANNER_PYPI_PACKAGE}"
+    print_warn "Could not install ${SKILL_SCANNER_PYPI_PACKAGE} into ${venv_dir} via uv."
     print_warn "Docs: https://github.com/cisco-ai-defense/skill-scanner"
     return 0
 }
