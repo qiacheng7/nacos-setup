@@ -346,7 +346,7 @@ print_completion_info() {
     
     if [ "$should_open_browser" = true ]; then
         # Show countdown before opening browser
-        for i in 5 4 3 2 1; do
+        for i in 3 2 1; do
             echo -ne "\r[INFO] Opening console in browser in ${i}s..." >&2
             sleep 1
         done
