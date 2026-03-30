@@ -294,9 +294,18 @@ start_nacos_process() {
     mkdir -p "$install_dir/logs" 2>/dev/null || true
 
     if [ "$use_derby" = true ] && [ "$mode" = "cluster" ]; then
-        bash "$install_dir/bin/startup.sh" -m "$mode" -p embedded >"$startup_log" 2>&1
+        if _pm_is_windows_env; then
+            # Git Bash may block when startup.sh keeps foreground attached.
+            ( bash "$install_dir/bin/startup.sh" -m "$mode" -p embedded >"$startup_log" 2>&1 ) &
+        else
+            bash "$install_dir/bin/startup.sh" -m "$mode" -p embedded >"$startup_log" 2>&1
+        fi
     else
-        bash "$install_dir/bin/startup.sh" -m "$mode" >"$startup_log" 2>&1
+        if _pm_is_windows_env; then
+            ( bash "$install_dir/bin/startup.sh" -m "$mode" >"$startup_log" 2>&1 ) &
+        else
+            bash "$install_dir/bin/startup.sh" -m "$mode" >"$startup_log" 2>&1
+        fi
     fi
     
     # Clear JAVA_OPT after starting
