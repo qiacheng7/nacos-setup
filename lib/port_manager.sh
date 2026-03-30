@@ -20,61 +20,19 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-# Git Bash / MSYS / Cygwin: avoid lsof (often missing or flaky) and bash /dev/tcp
-# (can block for a long time or misbehave). Use Python / PowerShell / netstat instead.
-_portmgr_is_windows_env() {
+# ============================================================================
+# Platform Detection
+# ============================================================================
+
+# Detect Windows environment (Git Bash, MSYS, Cygwin)
+_is_windows_env() {
     case "${OSTYPE:-}" in
-        cygwin | msys) return 0 ;;
+        cygwin|msys|win32) return 0 ;;
     esac
     case "$(uname -s 2>/dev/null)" in
-        CYGWIN* | MINGW* | MSYS*) return 0 ;;
+        CYGWIN*|MINGW*|MSYS*|Windows_NT) return 0 ;;
         *) return 1 ;;
     esac
-}
-
-# Returns 0 if port is available, 1 if in use (same contract as check_port_available).
-_check_port_available_windows() {
-    local port=$1
-    local python_cmd
-    python_cmd=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)
-    if [ -n "$python_cmd" ]; then
-        if $python_cmd -c "import socket,sys
-p=int(sys.argv[1])
-s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try:
-    s.bind(('127.0.0.1', p))
-    s.close()
-    sys.exit(0)
-except OSError:
-    sys.exit(1)" "$port" 2>/dev/null; then
-            return 0
-        fi
-        return 1
-    fi
-
-    if command -v powershell.exe >/dev/null 2>&1; then
-        local ec=0
-        powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \
-            "\$ErrorActionPreference='SilentlyContinue'; if (Get-NetTCPConnection -LocalPort $port -State Listen -EA SilentlyContinue) { exit 1 } else { exit 0 }" >/dev/null 2>&1
-        ec=$?
-        if [ "$ec" -eq 1 ]; then
-            return 1
-        fi
-        if [ "$ec" -eq 0 ]; then
-            return 0
-        fi
-    fi
-
-    if command -v netstat >/dev/null 2>&1; then
-        if netstat -an 2>/dev/null | grep -i LISTEN | grep -qE ":${port}[[:space:]]"; then
-            return 1
-        fi
-        return 0
-    fi
-
-    print_warn "Cannot verify port ${port} on Windows (no python, powershell, or netstat); assuming available." >&2
-    return 0
 }
 
 # ============================================================================
@@ -85,13 +43,26 @@ except OSError:
 # Returns: 0 if available, 1 if in use
 check_port_available() {
     local port=$1
-
-    if _portmgr_is_windows_env; then
-        _check_port_available_windows "$port"
-        return $?
+    
+    if _is_windows_env; then
+        # Windows / Git Bash: use netstat or PowerShell
+        if command -v netstat >/dev/null 2>&1; then
+            if netstat -an 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -q "LISTEN"; then
+                return 1  # Port is in use
+            fi
+        fi
+        # Try PowerShell if available (more reliable on modern Windows)
+        if command -v powershell >/dev/null 2>&1; then
+            if powershell -Command "\$p = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if(\$p) { exit 1 } else { exit 0 }" 2>/dev/null; then
+                return 0
+            else
+                return 1
+            fi
+        fi
+        return 0  # Assume available if we can't detect
     fi
 
-    # Check if port is in use (Unix and non-Windows Git environments)
+    # Linux / macOS original logic (kept unchanged)
     if command -v lsof &> /dev/null; then
         # Use lsof if available (most reliable)
         if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
@@ -128,13 +99,13 @@ check_port_available() {
         else
             return 1  # Port is in use
         fi
-    elif ! _portmgr_is_windows_env; then
-        # Bash /dev/tcp: do not use on MSYS/Cygwin (can hang or block for a long time).
+    else
+        # Try bash built-in /dev/tcp as last resort
         if (echo > /dev/tcp/localhost/$port) 2>/dev/null; then
             return 1  # Port is in use
         fi
     fi
-
+    
     return 0  # Port is available
 }
 
