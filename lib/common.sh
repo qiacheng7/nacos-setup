@@ -64,6 +64,58 @@ print_step_fail() {
 }
 
 # ============================================================================
+# Simple UI: in-progress step line (non-verbose only)
+# Shows [n/t] description with an indeterminate ASCII bar until step_simple_clear.
+# With -x/--verbose, these are no-ops; use print_detail for diagnostics.
+# ============================================================================
+
+STEP_SIMPLE_SPINNER_PID=""
+
+step_simple_clear() {
+    if [ -n "${STEP_SIMPLE_SPINNER_PID:-}" ]; then
+        kill "$STEP_SIMPLE_SPINNER_PID" 2>/dev/null || true
+        wait "$STEP_SIMPLE_SPINNER_PID" 2>/dev/null || true
+        STEP_SIMPLE_SPINNER_PID=""
+        if [ "${VERBOSE:-false}" != true ]; then
+            printf '\r\033[K'
+        fi
+    fi
+}
+
+# Start animated progress line on stdout (same stream as print_step; safe while
+# command substitutions only capture a child process's stdout).
+# Args: current total description
+step_simple_begin() {
+    local cur=$1
+    local tot=$2
+    local desc="$3"
+    if [ "${VERBOSE:-false}" = true ]; then
+        return 0
+    fi
+    step_simple_clear
+    (
+        local i=0
+        local w=10
+        while true; do
+            local pos=$((i % (w + 1)))
+            local bar=""
+            local j
+            for ((j = 0; j < w; j++)); do
+                if [ "$j" -eq "$pos" ]; then
+                    bar+="="
+                else
+                    bar+="-"
+                fi
+            done
+            printf "\r\033[K${GREEN}[%s/%s]${NC} %s  [%s]" "$cur" "$tot" "$desc" "$bar"
+            i=$((i + 1))
+            sleep 0.09
+        done
+    ) &
+    STEP_SIMPLE_SPINNER_PID=$!
+}
+
+# ============================================================================
 # Version Comparison
 # ============================================================================
 

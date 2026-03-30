@@ -52,7 +52,8 @@ NACOS_PASSWORD=""
 
 cleanup_on_exit() {
     local exit_code=$?
-    
+    step_simple_clear 2>/dev/null || true
+
     # Prevent duplicate cleanup
     if [ "$CLEANUP_DONE" = true ]; then
         return 0
@@ -113,40 +114,52 @@ run_standalone_mode() {
     if [ "$VERBOSE" = true ]; then echo ""; fi
     
     # [1/7] Check Java requirements
+    step_simple_begin 1 $TOTAL_STEPS "Checking Java environment"
     if ! check_java_requirements "$VERSION" "$ADVANCED_MODE"; then
+        step_simple_clear
         print_step_fail 1 $TOTAL_STEPS "Checking Java environment"
         exit 1
     fi
+    step_simple_clear
     print_step 1 $TOTAL_STEPS "Checking Java environment" "Java ${JAVA_VERSION}"
     
     # [2/7] Download Nacos
+    step_simple_begin 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
     local zip_file=$(download_nacos "$VERSION")
     if [ -z "$zip_file" ]; then
+        step_simple_clear
         print_step_fail 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
         exit 1
     fi
+    step_simple_clear
     print_step 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
     
     # [3/7] Extract and install
+    step_simple_begin 3 $TOTAL_STEPS "Installing"
     local extracted_dir=$(extract_nacos_to_temp "$zip_file")
     if [ -z "$extracted_dir" ]; then
+        step_simple_clear
         print_step_fail 3 $TOTAL_STEPS "Installing"
         exit 1
     fi
     if ! install_nacos "$extracted_dir" "$INSTALL_DIR"; then
+        step_simple_clear
         print_step_fail 3 $TOTAL_STEPS "Installing"
         rm -rf "$(dirname "$extracted_dir")"
         exit 1
     fi
     cleanup_temp_dir "$(dirname "$extracted_dir")"
+    step_simple_clear
     print_step 3 $TOTAL_STEPS "Installing" "$INSTALL_DIR"
     
     # [4/7] Configure Nacos (ports + security + datasource)
+    step_simple_begin 4 $TOTAL_STEPS "Configuring"
     print_detail "Configuring Nacos..."
     local config_file="$INSTALL_DIR/conf/application.properties"
     
     local port_result=$(allocate_standalone_ports "$PORT" "$VERSION" "$ADVANCED_MODE" "$ALLOW_KILL")
     if [ -z "$port_result" ]; then
+        step_simple_clear
         print_step_fail 4 $TOTAL_STEPS "Configuring"
         exit 1
     fi
@@ -164,6 +177,7 @@ run_standalone_mode() {
             apply_datasource_config "$config_file" "$datasource_file"
             print_detail "External database configured"
         else
+            step_simple_clear
             print_step_fail 4 $TOTAL_STEPS "Configuring"
             print_error "External datasource specified but configuration not found at: $DEFAULT_DATASOURCE_CONFIG"
             print_info "To create the configuration, run:"
@@ -174,18 +188,22 @@ run_standalone_mode() {
         print_detail "Using embedded Derby database"
     fi
     rm -f "$config_file.bak"
+    step_simple_clear
     print_step 4 $TOTAL_STEPS "Configuring" "port=${SERVER_PORT} console=${CONSOLE_PORT}"
     
     # [5/7] Import default data
+    step_simple_begin 5 $TOTAL_STEPS "Importing default data"
     print_detail "Post-config: importing default agentspec / skill data into ${INSTALL_DIR}/data..."
     if declare -F run_post_nacos_config_data_import_hook >/dev/null 2>&1; then
         run_post_nacos_config_data_import_hook "$INSTALL_DIR"
     else
         print_detail "Default data import hook not available, skipping"
     fi
+    step_simple_clear
     print_step 5 $TOTAL_STEPS "Importing default data"
     
     # [6/7] Skill scanner
+    step_simple_begin 6 $TOTAL_STEPS "Setting up skill-scanner"
     print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
@@ -193,12 +211,14 @@ run_standalone_mode() {
             configure_skill_scanner_properties "$config_file"
         fi
     fi
+    step_simple_clear
     print_step 6 $TOTAL_STEPS "Setting up skill-scanner"
     
     # [7/7] Start Nacos
     if [ "$AUTO_START" = true ]; then
         local start_time=$(date +%s)
         
+        step_simple_begin 7 $TOTAL_STEPS "Starting Nacos"
         print_detail "Starting Nacos in standalone mode..."
         local pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false")
         if [ -z "$pid" ]; then
@@ -211,6 +231,7 @@ run_standalone_mode() {
         if wait_for_nacos_ready "$SERVER_PORT" "$CONSOLE_PORT" "$VERSION"; then
             local end_time=$(date +%s)
             local elapsed=$((end_time - start_time))
+            step_simple_clear
             print_step 7 $TOTAL_STEPS "Starting Nacos" "ready in ${elapsed}s (PID: ${STARTED_NACOS_PID:-?})"
             
             if [ -n "$NACOS_PASSWORD" ] && [ "$NACOS_PASSWORD" != "nacos" ]; then
@@ -222,6 +243,7 @@ run_standalone_mode() {
                 fi
             fi
         else
+            step_simple_clear
             print_step 7 $TOTAL_STEPS "Starting Nacos" "may still be starting"
         fi
         

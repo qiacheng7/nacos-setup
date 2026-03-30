@@ -53,7 +53,8 @@ NACOS_PASSWORD=""
 
 cleanup_on_exit() {
     local exit_code=$?
-    
+    step_simple_clear 2>/dev/null || true
+
     if [ "$CLEANUP_DONE" = true ]; then
         return 0
     fi
@@ -192,21 +193,28 @@ create_cluster() {
     if [ "$VERBOSE" = true ]; then echo ""; fi
     
     # [1/7] Check Java
+    step_simple_begin 1 $TOTAL_STEPS "Checking Java environment"
     if ! check_java_requirements "$VERSION" "$ADVANCED_MODE"; then
+        step_simple_clear
         print_step_fail 1 $TOTAL_STEPS "Checking Java environment"
         exit 1
     fi
+    step_simple_clear
     print_step 1 $TOTAL_STEPS "Checking Java environment" "Java ${JAVA_VERSION}"
     
     # [2/7] Download Nacos
+    step_simple_begin 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
     local zip_file=$(download_nacos "$VERSION")
     if [ -z "$zip_file" ]; then
+        step_simple_clear
         print_step_fail 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
         exit 1
     fi
+    step_simple_clear
     print_step 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
     
     # [3/7] Configure security
+    step_simple_begin 3 $TOTAL_STEPS "Configuring security & datasource"
     configure_cluster_security "$cluster_dir" "$ADVANCED_MODE"
     
     local use_derby=true
@@ -217,6 +225,7 @@ create_cluster() {
             print_detail "Using external database"
             use_derby=false
         else
+            step_simple_clear
             print_step_fail 3 $TOTAL_STEPS "Configuring security & datasource"
             print_error "External datasource config not found: $DEFAULT_DATASOURCE_CONFIG"
             exit 1
@@ -224,12 +233,15 @@ create_cluster() {
     else
         print_detail "Using embedded Derby database"
     fi
+    step_simple_clear
     print_step 3 $TOTAL_STEPS "Configuring security & datasource"
     
     # [4/7] Allocate ports and setup nodes
+    step_simple_begin 4 $TOTAL_STEPS "Setting up ${REPLICA_COUNT} nodes"
     print_detail "Allocating ports for $REPLICA_COUNT nodes..."
     local port_result=$(allocate_cluster_ports "$BASE_PORT" "$REPLICA_COUNT" "$VERSION")
     if [ -z "$port_result" ]; then
+        step_simple_clear
         print_step_fail 4 $TOTAL_STEPS "Setting up ${REPLICA_COUNT} nodes"
         exit 1
     fi
@@ -253,6 +265,7 @@ create_cluster() {
         print_detail "Configuring node $i..."
         
         if ! extract_nacos_to_target "$zip_file" "$cluster_dir" "$node_name"; then
+            step_simple_clear
             print_step_fail 4 $TOTAL_STEPS "Setting up ${REPLICA_COUNT} nodes"
             exit 1
         fi
@@ -320,9 +333,11 @@ create_cluster() {
     if [ ${#node_main_ports[@]} -gt 1 ]; then
         ports_summary="${node_main_ports[0]}..${node_main_ports[$((${#node_main_ports[@]}-1))]}"
     fi
+    step_simple_clear
     print_step 4 $TOTAL_STEPS "Setting up ${REPLICA_COUNT} nodes" "ports ${ports_summary}"
     
     # [5/7] Skill scanner
+    step_simple_begin 5 $TOTAL_STEPS "Setting up skill-scanner"
     print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
@@ -336,10 +351,12 @@ create_cluster() {
             done
         fi
     fi
+    step_simple_clear
     print_step 5 $TOTAL_STEPS "Setting up skill-scanner"
 
     # [6/7] Start all nodes
     if [ "$AUTO_START" = true ]; then
+        step_simple_begin 6 $TOTAL_STEPS "Starting ${REPLICA_COUNT} cluster nodes"
         for ((i=0; i<REPLICA_COUNT; i++)); do
             local node_name="${i}-v${VERSION}"
             local node_dir="$cluster_dir/$node_name"
@@ -357,22 +374,28 @@ create_cluster() {
                     done
                 fi
             else
+                step_simple_clear
                 print_step_fail 6 $TOTAL_STEPS "Starting cluster nodes"
                 exit 1
             fi
         done
+        step_simple_clear
         print_step 6 $TOTAL_STEPS "Starting ${REPLICA_COUNT} cluster nodes" "${#STARTED_PIDS[@]} nodes up"
         
         # [7/7] Initialize password
+        step_simple_begin 7 $TOTAL_STEPS "Initializing admin password"
         if [ -n "$NACOS_PASSWORD" ] && [ "$NACOS_PASSWORD" != "nacos" ]; then
             if initialize_admin_password "${node_main_ports[0]}" "${node_console_ports[0]}" "$VERSION" "$NACOS_PASSWORD"; then
+                step_simple_clear
                 print_step 7 $TOTAL_STEPS "Initializing admin password"
             else
                 print_warn "Password initialization failed (may already be set previously)"
                 NACOS_PASSWORD=""
+                step_simple_clear
                 print_step 7 $TOTAL_STEPS "Initializing admin password" "skipped"
             fi
         else
+            step_simple_clear
             print_step 7 $TOTAL_STEPS "Initializing admin password" "default"
         fi
         
@@ -596,18 +619,24 @@ join_cluster() {
     print_detail "New node: $new_node_name"
     
     # [1/5] Check Java
+    step_simple_begin 1 $TOTAL_STEPS "Checking Java environment"
     if ! check_java_requirements "$VERSION" "$ADVANCED_MODE"; then
+        step_simple_clear
         print_step_fail 1 $TOTAL_STEPS "Checking Java environment"
         exit 1
     fi
+    step_simple_clear
     print_step 1 $TOTAL_STEPS "Checking Java environment" "Java ${JAVA_VERSION}"
     
     # [2/5] Download
+    step_simple_begin 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
     local zip_file=$(download_nacos "$VERSION")
     if [ -z "$zip_file" ]; then
+        step_simple_clear
         print_step_fail 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
         exit 1
     fi
+    step_simple_clear
     print_step 2 $TOTAL_STEPS "Downloading Nacos $VERSION"
     
     # [3/5] Configure node
@@ -618,6 +647,8 @@ join_cluster() {
         exit 1
     fi
     
+    step_simple_begin 3 $TOTAL_STEPS "Configuring node"
+    
     TOKEN_SECRET=$(grep "^nacos.core.auth.plugin.nacos.token.secret.key=" "$share_properties" | cut -d'=' -f2-)
     IDENTITY_KEY=$(grep "^nacos.core.auth.server.identity.key=" "$share_properties" | cut -d'=' -f2-)
     IDENTITY_VALUE=$(grep "^nacos.core.auth.server.identity.value=" "$share_properties" | cut -d'=' -f2-)
@@ -625,6 +656,7 @@ join_cluster() {
     
     local new_node_dir="$cluster_dir/$new_node_name"
     if ! extract_nacos_to_target "$zip_file" "$cluster_dir" "$new_node_name"; then
+        step_simple_clear
         print_step_fail 3 $TOTAL_STEPS "Configuring node"
         exit 1
     fi
@@ -671,9 +703,11 @@ join_cluster() {
         run_post_nacos_config_data_import_hook "$new_node_dir"
     fi
     
+    step_simple_clear
     print_step 3 $TOTAL_STEPS "Configuring node" "port=${new_main_port} console=${new_console_port}"
 
     # [4/5] Skill scanner
+    step_simple_begin 4 $TOTAL_STEPS "Setting up skill-scanner"
     print_detail "Post-config: optional Cisco skill-scanner step..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
@@ -681,6 +715,7 @@ join_cluster() {
             configure_skill_scanner_properties "$config_file"
         fi
     fi
+    step_simple_clear
     print_step 4 $TOTAL_STEPS "Setting up skill-scanner"
 
     # Update cluster.conf in existing nodes
@@ -691,9 +726,11 @@ join_cluster() {
     
     # [5/5] Start new node
     if [ "$AUTO_START" = true ]; then
+        step_simple_begin 5 $TOTAL_STEPS "Starting node"
         local pid=$(start_cluster_node "$new_node_dir" "$new_node_name" "$new_main_port" "$new_console_port" "$VERSION" "$use_derby")
         
         if [ -n "$pid" ]; then
+            step_simple_clear
             print_step 5 $TOTAL_STEPS "Starting node" "joined (PID: $pid)"
             
             if [ "$DAEMON_MODE" = true ]; then
@@ -707,6 +744,7 @@ join_cluster() {
                 done
             fi
         else
+            step_simple_clear
             print_step_fail 5 $TOTAL_STEPS "Starting node"
             exit 1
         fi
