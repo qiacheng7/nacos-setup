@@ -7,6 +7,7 @@
 # Optional Cisco skill-scanner (https://github.com/cisco-ai-defense/skill-scanner)
 # PyPI: cisco-ai-skill-scanner — requires Python 3.10+ and uv.
 # One interactive (Y/n) gate before any uv / Python / venv work; decline or non-TTY skips the whole stack and Nacos continues.
+# After Y: missing uv is bootstrapped via install.sh (curl/wget/fetch, else Python urllib / ruby / node); missing Python 3.10+ uses `uv python install 3.10`.
 
 SKILL_SCANNER_PYPI_PACKAGE="cisco-ai-skill-scanner"
 MIN_NACOS_VERSION_FOR_SKILL_SCANNER="3.2.0"
@@ -122,6 +123,113 @@ _skill_scanner_runas_target_user() {
     "$@"
 }
 
+_skill_scanner_uv_on_path() {
+    _skill_scanner_runas_target_user bash -c 'command -v uv >/dev/null 2>&1'
+}
+
+# True if we can download HTTPS to stdout (curl, wget, fetch, Python, ruby, or node).
+_skill_scanner_have_url_fetch_tool() {
+    command -v curl >/dev/null 2>&1 && return 0
+    command -v wget >/dev/null 2>&1 && return 0
+    command -v fetch >/dev/null 2>&1 && return 0
+    local py
+    for py in python3 python python2.7 python2; do
+        command -v "$py" >/dev/null 2>&1 && return 0
+    done
+    command -v ruby >/dev/null 2>&1 && return 0
+    command -v node >/dev/null 2>&1 && return 0
+    return 1
+}
+
+# Run official uv install.sh in the target user environment (same shell as nacos-setup).
+# Prefers curl → wget → fetch (BSD) → Python urllib → ruby open-uri → node https.
+_skill_scanner_run_uv_install_sh() {
+    _skill_scanner_runas_target_user bash -c "
+        set -eo pipefail
+        url=\"\$1\"
+        if command -v curl >/dev/null 2>&1; then
+            curl -LsSf \"\$url\" | sh
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO- \"\$url\" | sh
+        elif command -v fetch >/dev/null 2>&1; then
+            fetch -q -o - \"\$url\" | sh
+        else
+            pyexe=\"\"
+            for py in python3 python python2.7 python2; do
+                if command -v \"\$py\" >/dev/null 2>&1; then
+                    pyexe=\"\$py\"
+                    break
+                fi
+            done
+            if [ -n \"\$pyexe\" ]; then
+                \"\$pyexe\" -c \"
+import sys
+url = sys.argv[1]
+try:
+    from urllib.request import urlopen
+except ImportError:
+    from urllib2 import urlopen
+data = urlopen(url).read()
+if sys.version_info[0] >= 3:
+    sys.stdout.buffer.write(data)
+else:
+    sys.stdout.write(data)
+\" \"\$url\" | sh
+            elif command -v ruby >/dev/null 2>&1; then
+                export url
+                ruby -e 'require \"open-uri\"; print URI.open(ENV[\"url\"]).read' | sh
+            elif command -v node >/dev/null 2>&1; then
+                node -e \"require('https').get(process.argv[1], function(r) { if (r.statusCode !== 200) process.exit(1); var d = []; r.on('data', function(c) { d.push(c); }); r.on('end', function() { process.stdout.write(Buffer.concat(d)); }); }).on('error', function() { process.exit(1); });\" \"\$url\" | sh
+            else
+                echo \"nacos-setup: need curl, wget, fetch, Python, ruby, or node to download uv installer\" >&2
+                exit 1
+            fi
+        fi
+    " _ "https://astral.sh/uv/install.sh"
+}
+
+# Prepend a directory to PATH in this shell if it exists and is not already present.
+_skill_scanner_prepend_path_dir() {
+    local d="$1"
+    [ -n "$d" ] && [ -d "$d" ] || return 0
+    case ":${PATH}:" in
+        *":${d}:"*) ;;
+        *) export PATH="${d}:${PATH}" ;;
+    esac
+}
+
+# Ensure common install locations are visible after `uv/install.sh` (typically ~/.local/bin).
+_skill_scanner_refresh_path_for_uv() {
+    local home
+    home=$(_skill_scanner_runas_target_user bash -c 'printf %s "$HOME"')
+    _skill_scanner_prepend_path_dir "${home}/.local/bin"
+    _skill_scanner_prepend_path_dir "${home}/.cargo/bin"
+}
+
+# Install Astral uv via official installer when missing. Updates PATH in the current process on success.
+_skill_scanner_bootstrap_uv() {
+    if _skill_scanner_uv_on_path; then
+        return 0
+    fi
+    if ! _skill_scanner_have_url_fetch_tool; then
+        print_warn "Cannot auto-install uv: need curl, wget, fetch, Python, ruby, or node on PATH."
+        return 1
+    fi
+    print_detail "Installing uv (https://astral.sh/uv/) via official install script..."
+    # Non-interactive-friendly; installs to ~/.local/bin by default on Unix.
+    if ! _skill_scanner_run_uv_install_sh; then
+        print_warn "Automatic uv installation failed. Install manually: https://docs.astral.sh/uv/getting-started/installation/"
+        return 1
+    fi
+    _skill_scanner_refresh_path_for_uv
+    if ! _skill_scanner_uv_on_path; then
+        print_warn "uv was installed but is not on PATH in this session. Open a new terminal or add ~/.local/bin to PATH."
+        return 1
+    fi
+    print_detail "uv is available: $(_skill_scanner_runas_target_user bash -c 'command -v uv')"
+    return 0
+}
+
 _find_python_310_plus() {
     local out
     if ! out=$(_skill_scanner_runas_target_user bash -c '
@@ -145,8 +253,9 @@ _ensure_python_310_plus_with_uv() {
         return 0
     fi
 
-    # Fallback: rely on uv-managed Python even if system Python is unavailable.
-    if _skill_scanner_runas_target_user uv python install 3.10 >/dev/null 2>&1; then
+    # Fallback: uv-managed Python when system Python is missing or < 3.10.
+    print_detail "No Python 3.10+ on PATH; installing Python 3.10 with uv..."
+    if _skill_scanner_runas_target_user uv python install 3.10; then
         py_exe=$(_skill_scanner_runas_target_user uv python find 3.10 2>/dev/null || true)
     fi
 
@@ -210,7 +319,7 @@ _confirm_skill_scanner_uv_stack() {
     fi
 
     local confirm
-    read -r -p "Install Cisco skill-scanner stack (requires uv + Python 3.10+ under ~/ai-infra/.venv)? (Y/n): " confirm
+    read -r -p "Install Cisco skill-scanner stack (uv + Python 3.10+ under ~/ai-infra/.venv; missing tools will be installed)? (Y/n): " confirm
     if [[ "$confirm" =~ ^[Nn]$ ]]; then
         return 1
     fi
@@ -280,9 +389,8 @@ maybe_install_skill_scanner_for_nacos() {
         return 0
     fi
 
-    if ! _skill_scanner_runas_target_user bash -c 'command -v uv >/dev/null 2>&1'; then
-        print_warn "No uv environment detected. Cannot install ${SKILL_SCANNER_PYPI_PACKAGE}."
-        print_warn "Please install uv first: https://docs.astral.sh/uv/getting-started/installation/"
+    if ! _skill_scanner_bootstrap_uv; then
+        print_warn "Cannot install ${SKILL_SCANNER_PYPI_PACKAGE} without uv."
         return 0
     fi
 
