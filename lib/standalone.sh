@@ -205,6 +205,8 @@ run_standalone_mode() {
     # [6/7] Skill scanner
     step_simple_begin 6 $TOTAL_STEPS "Setting up skill-scanner"
     print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
+    # Stop spinner before hook: skill-scanner may prompt on /dev/tty; background bar garbles read -p.
+    step_simple_clear
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
         if declare -F configure_skill_scanner_properties >/dev/null 2>&1 && declare -F _skill_scanner_should_write_plugin_config >/dev/null 2>&1; then

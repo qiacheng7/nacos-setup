@@ -435,9 +435,11 @@ _confirm_skill_scanner_uv_stack() {
     local prompt="Install Cisco skill-scanner stack (uv + Python 3.10+ under ~/ai-infra/.venv; missing tools will be installed)? (Y/n): "
 
     if [ -t 0 ]; then
+        printf '\n' >&2
         read -r -p "$prompt" confirm
     elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
         # Piped installs (e.g. curl | bash): stdin is the script; ask on the controlling terminal.
+        printf '\n' >&2
         read -r -p "$prompt" confirm </dev/tty
     else
         print_info "No interactive terminal: skipping optional Cisco skill-scanner setup (uv / Python 3.10+)."
