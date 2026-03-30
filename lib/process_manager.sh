@@ -21,6 +21,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/java_manager.sh"
 
+
+# Detect Windows shell environment (Git Bash/MSYS/Cygwin)
+_pm_is_windows_env() {
+    case "${OSTYPE:-}" in
+        cygwin|msys|win32) return 0 ;;
+    esac
+    case "$(uname -s 2>/dev/null)" in
+        CYGWIN*|MINGW*|MSYS*|Windows_NT) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ============================================================================
 # Health Check
 # ============================================================================
@@ -38,15 +50,26 @@ wait_for_nacos_ready() {
     
     # Determine health check URL based on Nacos version
     local nacos_major=$(echo "$nacos_version" | cut -d. -f1)
+    local health_url_alt=""
+    local health_url_alt2=""
     if [ "$nacos_major" -ge 3 ]; then
         health_url="http://localhost:${console_port}/v3/console/health/readiness"
+        health_url_alt="http://localhost:${main_port}/v3/console/health/readiness"
+        health_url_alt2="http://localhost:${console_port}/nacos/v3/console/health/readiness"
     else
         health_url="http://localhost:${main_port}/nacos/v2/console/health/readiness"
     fi
+
+    # Windows startup under Git Bash is often slower than Linux/macOS.
+    if _pm_is_windows_env && [ "$max_wait" -lt 120 ]; then
+        max_wait=120
+    fi
     
     while [ $wait_count -lt $max_wait ]; do
-        # Check health endpoint
-        if curl -sf "$health_url" >/dev/null 2>&1; then
+        # Check health endpoint (with fallbacks for Nacos 3.x path differences)
+        if curl -sf "$health_url" >/dev/null 2>&1 || \
+           { [ -n "$health_url_alt" ] && curl -sf "$health_url_alt" >/dev/null 2>&1; } || \
+           { [ -n "$health_url_alt2" ] && curl -sf "$health_url_alt2" >/dev/null 2>&1; }; then
             if [ "$VERBOSE" = true ]; then echo -ne "\r\033[K" >&2; fi
             return 0
         fi
@@ -172,8 +195,18 @@ start_nacos_process() {
         export PATH="${JAVA_HOME}/bin:${PATH}"
     fi
 
-    # Start Nacos (redirect output to avoid blocking)
-    if [ "$use_derby" = true ] && [ "$mode" = "cluster" ]; then
+    # Start Nacos (Windows: prefer startup.cmd; Unix: startup.sh).
+    if _pm_is_windows_env && [ -f "$install_dir/bin/startup.cmd" ]; then
+        local win_startup="$install_dir/bin/startup.cmd"
+        if command -v cygpath >/dev/null 2>&1; then
+            win_startup=$(cygpath -w "$install_dir/bin/startup.cmd" 2>/dev/null || echo "$install_dir/bin/startup.cmd")
+        fi
+        if [ "$use_derby" = true ] && [ "$mode" = "cluster" ]; then
+            cmd.exe /c "echo Y | \"${win_startup}\" -m \"${mode}\" -p embedded" >/dev/null 2>&1
+        else
+            cmd.exe /c "echo Y | \"${win_startup}\" -m \"${mode}\"" >/dev/null 2>&1
+        fi
+    elif [ "$use_derby" = true ] && [ "$mode" = "cluster" ]; then
         bash "$install_dir/bin/startup.sh" -m "$mode" -p embedded >/dev/null 2>&1
     else
         bash "$install_dir/bin/startup.sh" -m "$mode" >/dev/null 2>&1
@@ -187,7 +220,7 @@ start_nacos_process() {
     local retry_count=0
     local max_retries=15
     local is_windows=0
-    _is_windows_env && is_windows=1
+    _pm_is_windows_env && is_windows=1
     
     while [ $retry_count -lt $max_retries ]; do
         sleep 1
