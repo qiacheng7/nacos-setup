@@ -35,6 +35,13 @@ _is_windows_env() {
     esac
 }
 
+# Debug helper for port checks (only in verbose mode)
+_port_debug() {
+    if [ "${VERBOSE:-false}" = true ]; then
+        echo "[DEBUG] check_port_available $1 (windows=$(_is_windows_env && echo yes || echo no))" >&2
+    fi
+}
+
 # ============================================================================
 # Port Availability Check
 # ============================================================================
@@ -43,22 +50,28 @@ _is_windows_env() {
 # Returns: 0 if available, 1 if in use
 check_port_available() {
     local port=$1
+    _port_debug "$port"
     
     if _is_windows_env; then
         # Windows / Git Bash: use netstat or PowerShell
         if command -v netstat >/dev/null 2>&1; then
             if netstat -an 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -q "LISTEN"; then
+                _port_debug "$port -> IN USE (netstat)"
                 return 1  # Port is in use
             fi
+            _port_debug "$port -> AVAILABLE (netstat)"
         fi
         # Try PowerShell if available (more reliable on modern Windows)
         if command -v powershell >/dev/null 2>&1; then
             if powershell -Command "\$p = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if(\$p) { exit 1 } else { exit 0 }" 2>/dev/null; then
+                _port_debug "$port -> AVAILABLE (powershell)"
                 return 0
             else
+                _port_debug "$port -> IN USE (powershell)"
                 return 1
             fi
         fi
+        _port_debug "$port -> AVAILABLE (fallback)"
         return 0  # Assume available if we can't detect
     fi
 
