@@ -416,14 +416,75 @@ _skill_scanner_venv_dir_for_user() {
     _skill_scanner_runas_target_user bash -c 'printf "%s/%s\n" "$HOME" "'"$SKILL_SCANNER_VENV_PATH_RELATIVE"'"'
 }
 
+_skill_scanner_warn_uv_venv_failed() {
+    local code=$1 py_exe=$2 venv_dir=$3 log=$4
+    print_warn "uv venv failed (exit $code) at $venv_dir (Python: $py_exe)."
+    if [ -n "$log" ] && [ -s "$log" ]; then
+        print_warn "uv output:"
+        while IFS= read -r line || [ -n "$line" ]; do
+            print_warn "  $line"
+        done < "$log"
+    fi
+    print_warn "If this path has a broken or partial venv, remove and retry: rm -rf \"$venv_dir\""
+    print_warn "See: https://docs.astral.sh/uv/ (venv --no-project, UV_LINK_MODE=copy)"
+}
+
+# Create venv at venv_dir with uv. Uses --no-project so a pyproject/workspace under ~/ai-infra
+# does not change behavior. Logs uv output on failure (quiet mode hides success noise only).
 _create_skill_scanner_venv_with_uv() {
     local py_exe=$1
     local venv_dir=$2
-    if _skill_scanner_uv_use_quiet_output; then
-        _skill_scanner_runas_target_user env UV_NO_PROGRESS=1 uv -q venv --python "$py_exe" "$venv_dir" >/dev/null 2>&1
-    else
-        _skill_scanner_runas_target_user uv venv --python "$py_exe" "$venv_dir"
+    local parent rc logf
+
+    parent=$(dirname "$venv_dir")
+    if ! mkdir -p "$parent" 2>/dev/null; then
+        print_warn "Could not create directory: $parent"
+        return 1
     fi
+
+    logf="${TMPDIR:-/tmp}/nacos-setup-uv-venv.$$.log"
+
+    if _skill_scanner_uv_use_quiet_output; then
+        : >"$logf" 2>/dev/null || logf=/dev/null
+        _skill_scanner_runas_target_user env UV_NO_PROGRESS=1 uv -q venv --no-project --python "$py_exe" "$venv_dir" >"$logf" 2>&1
+        rc=$?
+        # Incomplete or conflicting directory from a previous run — one retry with --clear.
+        if [ "$rc" -ne 0 ] && [ -d "$venv_dir" ]; then
+            _skill_scanner_runas_target_user env UV_NO_PROGRESS=1 uv -q venv --no-project --clear --python "$py_exe" "$venv_dir" >"$logf" 2>&1
+            rc=$?
+        fi
+        # Hardlinks sometimes fail on overlay/virt FS — retry with copy link mode.
+        if [ "$rc" -ne 0 ]; then
+            _skill_scanner_runas_target_user env UV_NO_PROGRESS=1 UV_LINK_MODE=copy uv -q venv --no-project --python "$py_exe" "$venv_dir" >"$logf" 2>&1
+            rc=$?
+        fi
+        if [ "$rc" -ne 0 ] && [ -d "$venv_dir" ]; then
+            _skill_scanner_runas_target_user env UV_NO_PROGRESS=1 UV_LINK_MODE=copy uv -q venv --no-project --clear --python "$py_exe" "$venv_dir" >"$logf" 2>&1
+            rc=$?
+        fi
+        if [ "$rc" -ne 0 ]; then
+            _skill_scanner_warn_uv_venv_failed "$rc" "$py_exe" "$venv_dir" "$logf"
+            [ "$logf" != /dev/null ] && rm -f "$logf"
+            return "$rc"
+        fi
+        [ "$logf" != /dev/null ] && rm -f "$logf"
+        return 0
+    fi
+
+    if ! _skill_scanner_runas_target_user uv venv --no-project --python "$py_exe" "$venv_dir"; then
+        rc=$?
+        if [ -d "$venv_dir" ] && _skill_scanner_runas_target_user uv venv --no-project --clear --python "$py_exe" "$venv_dir"; then
+            return 0
+        fi
+        if _skill_scanner_runas_target_user env UV_LINK_MODE=copy uv venv --no-project --python "$py_exe" "$venv_dir"; then
+            return 0
+        fi
+        if [ -d "$venv_dir" ] && _skill_scanner_runas_target_user env UV_LINK_MODE=copy uv venv --no-project --clear --python "$py_exe" "$venv_dir"; then
+            return 0
+        fi
+        return "$rc"
+    fi
+    return 0
 }
 
 _install_skill_scanner_uv_in_venv() {
