@@ -387,7 +387,7 @@ _ensure_python_310_plus_with_uv() {
         print_info "Skipping uv-managed Python 3.10." >&2
         return 1
     fi
-    print_info "Installing Python 3.10 with uv..." >&2
+    print_info "Installing Python 3.10 with uv (this may take a moment)..." >&2
     local py_install_ok=0
     if _skill_scanner_uv_use_quiet_output; then
         if _skill_scanner_runas_target_user env UV_NO_PROGRESS=1 uv -q python install 3.10 >/dev/null 2>&1; then
@@ -404,6 +404,7 @@ _ensure_python_310_plus_with_uv() {
     fi
 
     if [ -n "$py_exe" ] && _skill_scanner_runas_target_user "$py_exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+        print_info "Python 3.10 ready: $py_exe" >&2
         printf '%s\n' "$py_exe"
         return 0
     fi
@@ -472,15 +473,37 @@ _skill_scanner_installed_in_venv() {
 
 # Confirm downloading and running Astral uv install.sh. Returns 0 if user accepts, 1 if decline or no TTY.
 _confirm_uv_bootstrap_interactive() {
-    local confirm
     local prompt="uv is not on PATH. Download and install uv from Astral (https://astral.sh/uv/)? (Y/n): "
 
-    if [ -t 0 ]; then
+    if declare -F nacos_setup_read_prompt >/dev/null 2>&1; then
+        nacos_setup_read_prompt "$prompt"
+        local pr=$?
+        if [ "$pr" -eq 2 ]; then
+            print_info "No interactive terminal: cannot prompt for uv installation."
+            return 1
+        fi
+        if [ "$pr" -ne 0 ]; then
+            return 1
+        fi
+        if [[ "${REPLY:-}" =~ ^[Nn]$ ]]; then
+            return 1
+        fi
+        return 0
+    fi
+
+    local confirm
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        if declare -F nacos_setup_pause_simple_ui >/dev/null 2>&1; then
+            nacos_setup_pause_simple_ui
+        fi
+        printf '\n' >/dev/tty 2>/dev/null || true
+        IFS= read -r -p "$prompt" confirm </dev/tty 2>/dev/tty || {
+            print_info "No interactive terminal: cannot prompt for uv installation."
+            return 1
+        }
+    elif [ -t 0 ]; then
         printf '\n' >&2
         read -r -p "$prompt" confirm
-    elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-        printf '\n' >&2
-        read -r -p "$prompt" confirm </dev/tty
     else
         print_info "No interactive terminal: cannot prompt for uv installation."
         return 1
@@ -493,15 +516,37 @@ _confirm_uv_bootstrap_interactive() {
 
 # Confirm installing Python 3.10 via uv when none on PATH (stdout must stay clean for py_exe capture).
 _confirm_uv_python310_interactive() {
-    local confirm
     local prompt="No Python 3.10+ on PATH. Install Python 3.10 with uv now? (Y/n): "
 
-    if [ -t 0 ]; then
+    if declare -F nacos_setup_read_prompt >/dev/null 2>&1; then
+        nacos_setup_read_prompt "$prompt"
+        local pr=$?
+        if [ "$pr" -eq 2 ]; then
+            print_info "No interactive terminal: cannot prompt for uv-managed Python." >&2
+            return 1
+        fi
+        if [ "$pr" -ne 0 ]; then
+            return 1
+        fi
+        if [[ "${REPLY:-}" =~ ^[Nn]$ ]]; then
+            return 1
+        fi
+        return 0
+    fi
+
+    local confirm
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        if declare -F nacos_setup_pause_simple_ui >/dev/null 2>&1; then
+            nacos_setup_pause_simple_ui
+        fi
+        printf '\n' >/dev/tty 2>/dev/null || true
+        IFS= read -r -p "$prompt" confirm </dev/tty 2>/dev/tty || {
+            print_info "No interactive terminal: cannot prompt for uv-managed Python." >&2
+            return 1
+        }
+    elif [ -t 0 ]; then
         printf '\n' >&2
         read -r -p "$prompt" confirm
-    elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-        printf '\n' >&2
-        read -r -p "$prompt" confirm </dev/tty
     else
         print_info "No interactive terminal: cannot prompt for uv-managed Python." >&2
         return 1
@@ -516,18 +561,41 @@ _confirm_uv_python310_interactive() {
 # Optional arg: current Nacos server version (for messaging only).
 _confirm_skill_scanner_uv_stack() {
     local nacos_version="${1:-${VERSION:-}}"
-    local confirm
     local prompt="Install Cisco skill-scanner stack (uv + Python 3.10+ under ~/ai-infra/.venv; missing tools will be installed)? (Y/n): "
 
     print_info "Optional Cisco skill-scanner for Nacos ${nacos_version}: proceeding may install uv, Python 3.10+, and ${SKILL_SCANNER_PYPI_PACKAGE} under ~/ai-infra/.venv."
 
-    if [ -t 0 ]; then
+    if declare -F nacos_setup_read_prompt >/dev/null 2>&1; then
+        nacos_setup_read_prompt "$prompt"
+        local pr=$?
+        if [ "$pr" -eq 2 ]; then
+            print_info "No interactive terminal: skipping optional Cisco skill-scanner setup (uv / Python 3.10+)."
+            _skill_scanner_trace "skip stack: no tty (stdin not a tty and /dev/tty unavailable)"
+            return 1
+        fi
+        if [ "$pr" -ne 0 ]; then
+            return 1
+        fi
+        if [[ "${REPLY:-}" =~ ^[Nn]$ ]]; then
+            return 1
+        fi
+        return 0
+    fi
+
+    local confirm
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        if declare -F nacos_setup_pause_simple_ui >/dev/null 2>&1; then
+            nacos_setup_pause_simple_ui
+        fi
+        printf '\n' >/dev/tty 2>/dev/null || true
+        IFS= read -r -p "$prompt" confirm </dev/tty 2>/dev/tty || {
+            print_info "No interactive terminal: skipping optional Cisco skill-scanner setup (uv / Python 3.10+)."
+            _skill_scanner_trace "skip stack: no tty (stdin not a tty and /dev/tty unavailable)"
+            return 1
+        }
+    elif [ -t 0 ]; then
         printf '\n' >&2
         read -r -p "$prompt" confirm
-    elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-        # Piped installs (e.g. curl | bash): stdin is the script; ask on the controlling terminal.
-        printf '\n' >&2
-        read -r -p "$prompt" confirm </dev/tty
     else
         print_info "No interactive terminal: skipping optional Cisco skill-scanner setup (uv / Python 3.10+)."
         _skill_scanner_trace "skip stack: no tty (stdin not a tty and /dev/tty unavailable)"
@@ -575,6 +643,10 @@ maybe_install_skill_scanner_for_nacos() {
     if ! version_ge "$nacos_version" "$MIN_NACOS_VERSION_FOR_SKILL_SCANNER"; then
         _skill_scanner_trace "skip: nacos ${nacos_version} < ${MIN_NACOS_VERSION_FOR_SKILL_SCANNER} (no skill-scanner step)"
         return 0
+    fi
+
+    if declare -F nacos_setup_pause_simple_ui >/dev/null 2>&1; then
+        nacos_setup_pause_simple_ui
     fi
 
     # Try to add skill-scanner to PATH if not already there

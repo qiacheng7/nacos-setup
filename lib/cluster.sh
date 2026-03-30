@@ -340,10 +340,12 @@ create_cluster() {
     step_simple_clear
     print_step 4 $TOTAL_STEPS "Setting up ${REPLICA_COUNT} nodes" "ports ${ports_summary}"
     
-    # [5/7] Skill scanner
-    step_simple_begin 5 $TOTAL_STEPS "Setting up skill-scanner"
-    print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
+    # [5/7] Skill scanner — no spinner (interactive prompts must stay visible)
     step_simple_clear
+    if [ "${VERBOSE:-false}" != true ]; then
+        echo -e "${GREEN}[5/7]${NC} Setting up skill-scanner"
+    fi
+    print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
         if declare -F configure_skill_scanner_properties >/dev/null 2>&1 && declare -F _skill_scanner_should_write_plugin_config >/dev/null 2>&1; then
@@ -738,10 +740,12 @@ join_cluster() {
     step_simple_clear
     print_step 3 $TOTAL_STEPS "Configuring node" "port=${new_main_port} console=${new_console_port}"
 
-    # [4/5] Skill scanner
-    step_simple_begin 4 $TOTAL_STEPS "Setting up skill-scanner"
-    print_detail "Post-config: optional Cisco skill-scanner step..."
+    # [4/5] Skill scanner — no spinner (interactive prompts must stay visible)
     step_simple_clear
+    if [ "${VERBOSE:-false}" != true ]; then
+        echo -e "${GREEN}[4/5]${NC} Setting up skill-scanner"
+    fi
+    print_detail "Post-config: optional Cisco skill-scanner step..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
         if declare -F configure_skill_scanner_properties >/dev/null 2>&1 && declare -F _skill_scanner_should_write_plugin_config >/dev/null 2>&1; then

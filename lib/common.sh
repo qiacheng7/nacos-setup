@@ -94,6 +94,11 @@ step_simple_begin() {
     fi
     step_simple_clear
     (
+        # Detect fractional sleep support (busybox/Alpine may only accept integers).
+        local sleep_interval=0.09
+        if ! sleep 0.01 2>/dev/null; then
+            sleep_interval=1
+        fi
         local i=0
         local w=10
         while true; do
@@ -109,10 +114,39 @@ step_simple_begin() {
             done
             printf "\r\033[K${GREEN}[%s/%s]${NC} %s  [%s]" "$cur" "$tot" "$desc" "$bar"
             i=$((i + 1))
-            sleep 0.09
+            sleep $sleep_interval
         done
     ) &
     STEP_SIMPLE_SPINNER_PID=$!
+}
+
+# Stop simple-mode spinner; optional newline so prompts are not drawn on the spinner line.
+nacos_setup_pause_simple_ui() {
+    if declare -F step_simple_clear >/dev/null 2>&1; then
+        step_simple_clear 2>/dev/null || true
+    fi
+    if [ "${VERBOSE:-false}" != true ]; then
+        printf '\n' 2>/dev/null || true
+    fi
+}
+
+# Read one line for Y/n flows. Prefers /dev/tty for stdin and stderr so prompts stay visible
+# when stdin is a pipe and are not hidden behind the simple-mode stdout spinner. Sets REPLY.
+# Returns 0 on success, 2 if no interactive input is possible.
+nacos_setup_read_prompt() {
+    local prompt="$1"
+    nacos_setup_pause_simple_ui
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        printf '\n' >/dev/tty 2>/dev/null || true
+        IFS= read -r -p "$prompt" REPLY </dev/tty 2>/dev/tty || return 2
+        return 0
+    fi
+    if [ -t 0 ]; then
+        printf '\n' || true
+        IFS= read -r -p "$prompt" REPLY || return 2
+        return 0
+    fi
+    return 2
 }
 
 # ============================================================================
@@ -433,8 +467,8 @@ check_system_commands() {
         return 1
     fi
     
-    # Warn about missing optional commands
-    if [ ${#optional_missing[@]} -gt 0 ]; then
+    # Optional tools (lsof, etc.): only mention in verbose / advanced UX to keep simple install quiet.
+    if [ ${#optional_missing[@]} -gt 0 ] && [ "${VERBOSE:-false}" = true ]; then
         print_warn "Optional commands not found: ${optional_missing[*]}"
         print_info "Some features may be limited (port detection, process management)"
         echo ""

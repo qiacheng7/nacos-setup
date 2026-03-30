@@ -202,11 +202,12 @@ run_standalone_mode() {
     step_simple_clear
     print_step 5 $TOTAL_STEPS "Importing default data"
     
-    # [6/7] Skill scanner
-    step_simple_begin 6 $TOTAL_STEPS "Setting up skill-scanner"
-    print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
-    # Stop spinner before hook: skill-scanner may prompt on /dev/tty; background bar garbles read -p.
+    # [6/7] Skill scanner — no spinner (it masks read -p on some terminals); show a static step line.
     step_simple_clear
+    if [ "${VERBOSE:-false}" != true ]; then
+        echo -e "${GREEN}[6/7]${NC} Setting up skill-scanner"
+    fi
+    print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
         if declare -F configure_skill_scanner_properties >/dev/null 2>&1 && declare -F _skill_scanner_should_write_plugin_config >/dev/null 2>&1; then
