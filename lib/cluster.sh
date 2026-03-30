@@ -123,7 +123,12 @@ start_cluster_node() {
     fi
     
     # Start the node
-    local pid=$(start_nacos_process "$node_dir" "cluster" "$use_derby" "$main_port")
+    local pid
+    if [ "$nacos_major" -ge 3 ]; then
+        pid=$(start_nacos_process "$node_dir" "cluster" "$use_derby" "$main_port" "$console_port")
+    else
+        pid=$(start_nacos_process "$node_dir" "cluster" "$use_derby" "$main_port")
+    fi
     
     if [ -z "$pid" ]; then
         print_error "Failed to start node $node_name" >&2

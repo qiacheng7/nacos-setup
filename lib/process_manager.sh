@@ -70,9 +70,14 @@ _pm_get_pid_by_listen_port() {
             fi
         fi
 
-        # netstat fallback
+        # netstat fallback (LocalPort in column 2; PID is last field). Do not grep
+        # English-only LISTENING — non-English Windows uses localized state names.
         if command -v netstat >/dev/null 2>&1; then
-            pid=$(netstat -ano 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -Ei "LISTEN|LISTENING" | awk '{print $NF}' | grep -E '^[0-9]+$' | head -1)
+            pid=$(netstat -ano 2>/dev/null | awk -v port="$port" '
+                $1 == "TCP" && ($2 ~ ":" port "$" || $2 ~ "\\]:" port "$") {
+                    last = $NF
+                    if (last ~ /^[0-9]+$/) { print last; exit }
+                }')
             if [ -n "$pid" ]; then
                 printf '%s\n' "$pid"
                 return 0
@@ -262,13 +267,15 @@ initialize_admin_password() {
 # ============================================================================
 
 # Start Nacos process
-# Parameters: install_dir, mode (standalone/cluster), use_derby (true/false), main_port(optional)
+# Parameters: install_dir, mode (standalone/cluster), use_derby (true/false),
+#             main_port (optional), console_port (optional, Nacos 3.x for PID-by-port)
 # Returns: PID on success, empty on failure
 start_nacos_process() {
     local install_dir=$1
     local mode=$2
     local use_derby=${3:-true}
     local main_port=${4:-}
+    local console_port=${5:-}
     
     if [ ! -d "$install_dir" ]; then
         print_error "Installation directory not found: $install_dir"
@@ -315,26 +322,40 @@ start_nacos_process() {
     local pid=""
     local retry_count=0
     local max_retries=40
-    
+    # Windows cold start + JVM often exceeds 40s; align closer with health wait.
+    if _pm_is_windows_env; then
+        max_retries=120
+    fi
+    local dir_basename
+    dir_basename=$(basename "$install_dir")
+
     while [ $retry_count -lt $max_retries ]; do
         sleep 1
-        pid=$(ps aux | grep "java" | grep "$install_dir" | grep -v grep | awk '{print $2}' | head -1)
+        # Use [j]ava to avoid matching the grep process itself.
+        pid=$(ps aux 2>/dev/null | grep -i '[j]ava' | grep -F "$install_dir" | awk '{print $2}' | head -1)
         if [ -z "$pid" ]; then
-            # Windows Git Bash often reports Windows path in java cmdline; fallback match by "nacos"
-            pid=$(ps aux | grep -i "java" | grep -i "nacos" | grep -v grep | awk '{print $2}' | head -1)
+            # Java cmdline on Windows is often C:\... while install_dir is /c/... — match leaf dir.
+            pid=$(ps aux 2>/dev/null | grep -i '[j]ava' | grep -F "$dir_basename" | awk '{print $2}' | head -1)
+        fi
+        if [ -z "$pid" ]; then
+            pid=$(ps aux 2>/dev/null | grep -i '[j]ava' | grep -i 'nacos' | awk '{print $2}' | head -1)
         fi
         if [ -z "$pid" ] && [ -n "$main_port" ]; then
             pid=$(_pm_get_pid_by_listen_port "$main_port" || true)
         fi
-        
+        # Cluster v2 passes console_port=0; standalone v2 echoes a dummy console — skip unless real.
+        if [ -z "$pid" ] && [ "${console_port:-0}" -gt 0 ] 2>/dev/null && [ "$console_port" != "$main_port" ]; then
+            pid=$(_pm_get_pid_by_listen_port "$console_port" || true)
+        fi
+
         if [ -n "$pid" ] && is_process_running "$pid"; then
             echo "$pid"
             return 0
         fi
-        
+
         retry_count=$((retry_count + 1))
     done
-    
+
     # Could not determine PID
     if [ "$VERBOSE" = true ] && [ -f "$startup_log" ]; then
         print_warn "Could not determine Nacos PID after ${max_retries}s. Startup log: $startup_log" >&2

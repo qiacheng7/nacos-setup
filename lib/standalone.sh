@@ -220,7 +220,13 @@ run_standalone_mode() {
         
         step_simple_begin 7 $TOTAL_STEPS "Starting Nacos"
         print_detail "Starting Nacos in standalone mode..."
-        local pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false" "$SERVER_PORT")
+        local nacos_major=$(echo "$VERSION" | cut -d. -f1)
+        local pid
+        if [ "$nacos_major" -ge 3 ]; then
+            pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false" "$SERVER_PORT" "$CONSOLE_PORT")
+        else
+            pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false" "$SERVER_PORT")
+        fi
         if [ -z "$pid" ]; then
             print_warn "Could not determine Nacos PID"
         else
