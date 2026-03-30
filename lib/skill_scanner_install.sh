@@ -65,6 +65,61 @@ _skill_scanner_venv_python_exists() {
     return 1
 }
 
+# Nacos on Windows uses JVM + ProcessBuilder; prefer C:/... (cygpath -m) for properties and exec.
+_skill_scanner_path_for_nacos_server() {
+    local p="$1"
+    local win_dir base w
+    [ -z "$p" ] && return 0
+    if ! _skill_scanner_is_windows_env; then
+        printf '%s\n' "$p"
+        return 0
+    fi
+    if command -v cygpath >/dev/null 2>&1; then
+        w=$(cygpath -m "$p" 2>/dev/null) || w=""
+        if [ -n "$w" ]; then
+            printf '%s\n' "$w"
+            return 0
+        fi
+        w=$(cygpath -aw "$p" 2>/dev/null) || w=""
+        if [ -n "$w" ]; then
+            printf '%s\n' "$w"
+            return 0
+        fi
+    fi
+    case "$p" in
+        /*)
+            base=$(basename "$p")
+            win_dir=$(cd "$(dirname "$p")" 2>/dev/null && pwd -W 2>/dev/null) || win_dir=""
+            if [ -n "$win_dir" ] && [ -n "$base" ]; then
+                printf '%s\n' "${win_dir}/${base}"
+                return 0
+            fi
+            ;;
+    esac
+    printf '%s\n' "$p"
+    return 0
+}
+
+# After maybe_install: write plugin config if stack was installed OR a scanner binary is already discoverable.
+_skill_scanner_should_write_plugin_config() {
+    if [ "${NACOS_SETUP_SKIP_SKILL_SCANNER:-}" = "1" ] || [ "${NACOS_SETUP_SKIP_SKILL_SCANNER:-}" = "true" ]; then
+        return 1
+    fi
+    if ! declare -F version_ge >/dev/null 2>&1; then
+        return 1
+    fi
+    if ! version_ge "${VERSION:-0}" "$MIN_NACOS_VERSION_FOR_SKILL_SCANNER"; then
+        return 1
+    fi
+    if [ "$SKILL_SCANNER_INSTALLED" = "true" ]; then
+        return 0
+    fi
+    if [ -n "$(_get_skill_scanner_command_path 2>/dev/null || true)" ]; then
+        return 0
+    fi
+    return 1
+}
+
 # Always write to stderr (no ANSI); survives logging pipelines.
 _skill_scanner_trace() {
     if [ "${VERBOSE:-false}" = true ]; then
@@ -150,6 +205,7 @@ configure_skill_scanner_properties() {
     local scanner_cmd
     scanner_cmd=$(_get_skill_scanner_command_path || true)
     if [ -n "$scanner_cmd" ]; then
+        scanner_cmd=$(_skill_scanner_path_for_nacos_server "$scanner_cmd")
         update_config_property "$config_file" "nacos.plugin.ai-pipeline.skill-scanner.command" "$scanner_cmd"
     fi
 
@@ -442,6 +498,7 @@ maybe_install_skill_scanner_for_nacos() {
 
     if command -v skill-scanner >/dev/null 2>&1; then
         _skill_scanner_trace "skill-scanner already on PATH; skip uv/venv install"
+        SKILL_SCANNER_INSTALLED="true"
         return 0
     fi
 

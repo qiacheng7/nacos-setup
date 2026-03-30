@@ -345,14 +345,16 @@ create_cluster() {
     print_detail "Post-config: optional Cisco skill-scanner step (Nacos ${VERSION})..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
-        if [ "$SKILL_SCANNER_INSTALLED" = "true" ] && declare -F configure_skill_scanner_properties >/dev/null 2>&1; then
-            for ((i=0; i<REPLICA_COUNT; i++)); do
-                local node_name="${i}-v${VERSION}"
-                local node_config_file="$cluster_dir/$node_name/conf/application.properties"
-                if [ -f "$node_config_file" ]; then
-                    configure_skill_scanner_properties "$node_config_file"
-                fi
-            done
+        if declare -F configure_skill_scanner_properties >/dev/null 2>&1 && declare -F _skill_scanner_should_write_plugin_config >/dev/null 2>&1; then
+            if _skill_scanner_should_write_plugin_config; then
+                for ((i=0; i<REPLICA_COUNT; i++)); do
+                    local node_name="${i}-v${VERSION}"
+                    local node_config_file="$cluster_dir/$node_name/conf/application.properties"
+                    if [ -f "$node_config_file" ]; then
+                        configure_skill_scanner_properties "$node_config_file"
+                    fi
+                done
+            fi
         fi
     fi
     step_simple_clear
@@ -740,8 +742,10 @@ join_cluster() {
     print_detail "Post-config: optional Cisco skill-scanner step..."
     if declare -F run_post_nacos_config_skill_scanner_hook >/dev/null 2>&1; then
         run_post_nacos_config_skill_scanner_hook
-        if [ "$SKILL_SCANNER_INSTALLED" = "true" ] && declare -F configure_skill_scanner_properties >/dev/null 2>&1; then
-            configure_skill_scanner_properties "$config_file"
+        if declare -F configure_skill_scanner_properties >/dev/null 2>&1 && declare -F _skill_scanner_should_write_plugin_config >/dev/null 2>&1; then
+            if _skill_scanner_should_write_plugin_config; then
+                configure_skill_scanner_properties "$config_file"
+            fi
         fi
     fi
     step_simple_clear
