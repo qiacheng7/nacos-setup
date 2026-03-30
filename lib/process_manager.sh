@@ -144,7 +144,7 @@ start_nacos_process() {
         export PATH="${JAVA_HOME}/bin:${PATH}"
     fi
 
-    # Start Nacos
+    # Start Nacos (redirect output to avoid blocking)
     if [ "$use_derby" = true ] && [ "$mode" = "cluster" ]; then
         bash "$install_dir/bin/startup.sh" -m "$mode" -p embedded >/dev/null 2>&1
     else
@@ -154,16 +154,29 @@ start_nacos_process() {
     # Clear JAVA_OPT after starting
     unset JAVA_OPT
     
-    # Try to find the PID (may take a moment for process to bind to port)
+    # Try to find the PID - Windows/Git Bash compatible
     local pid=""
     local retry_count=0
-    local max_retries=10
+    local max_retries=15
+    local is_windows=0
+    _is_windows_env && is_windows=1
     
     while [ $retry_count -lt $max_retries ]; do
-        sleep 1
-        pid=$(ps aux | grep "java" | grep "$install_dir" | grep -v grep | awk '{print $2}' | head -1)
+        sleep 1.5
         
-        if [ -n "$pid" ] && ps -p $pid >/dev/null 2>&1; then
+        if [ $is_windows -eq 1 ]; then
+            # Windows / Git Bash
+            if command -v tasklist >/dev/null 2>&1; then
+                pid=$(tasklist /fi "IMAGENAME eq java.exe" /fo csv 2>/dev/null | grep -i "$install_dir" | head -1 | cut -d',' -f2 | tr -d '"')
+            else
+                pid=$(ps -efW 2>/dev/null | grep "java" | grep "$install_dir" | grep -v grep | awk '{print $2}' | head -1)
+            fi
+        else
+            # Linux / macOS
+            pid=$(ps aux | grep "java" | grep "$install_dir" | grep -v grep | awk '{print $2}' | head -1)
+        fi
+        
+        if [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1; then
             echo "$pid"
             return 0
         fi
@@ -171,7 +184,8 @@ start_nacos_process() {
         retry_count=$((retry_count + 1))
     done
     
-    # Could not determine PID
+    # Could not determine PID - but Nacos may still be starting normally
+    print_warn "Could not determine Nacos PID (may still be starting)"
     echo ""
     return 1
 }
