@@ -220,13 +220,7 @@ run_standalone_mode() {
         
         step_simple_begin 7 $TOTAL_STEPS "Starting Nacos"
         print_detail "Starting Nacos in standalone mode..."
-        local nacos_major=$(echo "$VERSION" | cut -d. -f1)
-        local pid
-        if [ "$nacos_major" -ge 3 ]; then
-            pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false" "$SERVER_PORT" "$CONSOLE_PORT")
-        else
-            pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false" "$SERVER_PORT")
-        fi
+        local pid=$(start_nacos_process "$INSTALL_DIR" "standalone" "false" "$SERVER_PORT")
         if [ -z "$pid" ]; then
             print_warn "Could not determine Nacos PID"
         else
@@ -235,6 +229,15 @@ run_standalone_mode() {
         fi
         
         if wait_for_nacos_ready "$SERVER_PORT" "$CONSOLE_PORT" "$VERSION"; then
+            # Post-ready PID recovery: port is now listening, retry detection
+            if [ -z "$STARTED_NACOS_PID" ]; then
+                local recovered_pid
+                recovered_pid=$(detect_nacos_pid "$INSTALL_DIR" "$SERVER_PORT" || true)
+                if [ -n "$recovered_pid" ]; then
+                    STARTED_NACOS_PID=$recovered_pid
+                    print_detail "Recovered Nacos PID after readiness: $STARTED_NACOS_PID"
+                fi
+            fi
             local end_time=$(date +%s)
             local elapsed=$((end_time - start_time))
             step_simple_clear

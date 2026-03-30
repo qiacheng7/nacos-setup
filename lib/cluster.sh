@@ -123,12 +123,7 @@ start_cluster_node() {
     fi
     
     # Start the node
-    local pid
-    if [ "$nacos_major" -ge 3 ]; then
-        pid=$(start_nacos_process "$node_dir" "cluster" "$use_derby" "$main_port" "$console_port")
-    else
-        pid=$(start_nacos_process "$node_dir" "cluster" "$use_derby" "$main_port")
-    fi
+    local pid=$(start_nacos_process "$node_dir" "cluster" "$use_derby" "$main_port")
     
     if [ -z "$pid" ]; then
         print_error "Failed to start node $node_name" >&2
@@ -137,6 +132,10 @@ start_cluster_node() {
     
     # Wait for readiness
     if wait_for_nacos_ready "$main_port" "$console_port" "$nacos_version" 60; then
+        # Post-ready PID recovery for Windows
+        if [ -z "$pid" ]; then
+            pid=$(detect_nacos_pid "$node_dir" "$main_port" || true)
+        fi
         local end_time=$(date +%s)
         local elapsed=$((end_time - start_time))
         print_detail "Node $node_name ready (PID: $pid, ${elapsed}s)" >&2
@@ -547,8 +546,22 @@ clean_existing_cluster() {
     
     # Stop all running nodes
     for node_dir in "${node_dirs[@]}"; do
-        local pid=$(ps aux | grep "java" | grep "$node_dir" | grep -v grep | awk '{print $2}' | head -1)
-        
+        local pid=""
+        local node_config="$node_dir/conf/application.properties"
+        local node_port=""
+        if [ -f "$node_config" ]; then
+            node_port=$(grep "^nacos.server.main.port=" "$node_config" 2>/dev/null | cut -d'=' -f2)
+            [ -z "$node_port" ] && node_port=$(grep "^server.port=" "$node_config" 2>/dev/null | cut -d'=' -f2)
+        fi
+
+        pid=$(ps aux 2>/dev/null | grep "java" | grep "$node_dir" | grep -v grep | awk '{print $2}' | head -1)
+        if [ -z "$pid" ] && [ -n "$node_port" ]; then
+            pid=$(_pm_get_pid_by_listen_port "$node_port" || true)
+        fi
+        if [ -z "$pid" ] && _pm_is_windows_env; then
+            pid=$(_pm_find_nacos_pid_windows "$node_dir" || true)
+        fi
+
         if [ -n "$pid" ] && is_process_running "$pid"; then
             print_detail "Stopping $(basename "$node_dir") (PID: $pid)"
             stop_nacos_gracefully "$pid" 2 >/dev/null 2>&1 || true
@@ -559,8 +572,19 @@ clean_existing_cluster() {
     
     # Force kill if still running
     for node_dir in "${node_dirs[@]}"; do
-        local pid=$(ps aux | grep "java" | grep "$node_dir" | grep -v grep | awk '{print $2}' | head -1)
-        
+        local pid=""
+        local node_config="$node_dir/conf/application.properties"
+        local node_port=""
+        if [ -f "$node_config" ]; then
+            node_port=$(grep "^nacos.server.main.port=" "$node_config" 2>/dev/null | cut -d'=' -f2)
+            [ -z "$node_port" ] && node_port=$(grep "^server.port=" "$node_config" 2>/dev/null | cut -d'=' -f2)
+        fi
+
+        pid=$(ps aux 2>/dev/null | grep "java" | grep "$node_dir" | grep -v grep | awk '{print $2}' | head -1)
+        if [ -z "$pid" ] && [ -n "$node_port" ]; then
+            pid=$(_pm_get_pid_by_listen_port "$node_port" || true)
+        fi
+
         if [ -n "$pid" ] && is_process_running "$pid"; then
             stop_nacos_gracefully "$pid" 2 >/dev/null 2>&1 || true
         fi
@@ -818,8 +842,15 @@ leave_cluster() {
     fi
     
     # Stop node
-    local pid=$(ps aux | grep "java" | grep "$target_node_dir" | grep -v grep | awk '{print $2}' | head -1)
-    
+    local pid=""
+    pid=$(ps aux 2>/dev/null | grep "java" | grep "$target_node_dir" | grep -v grep | awk '{print $2}' | head -1)
+    if [ -z "$pid" ] && [ -n "$node_port" ]; then
+        pid=$(_pm_get_pid_by_listen_port "$node_port" || true)
+    fi
+    if [ -z "$pid" ] && _pm_is_windows_env; then
+        pid=$(_pm_find_nacos_pid_windows "$target_node_dir" || true)
+    fi
+
     if [ -n "$pid" ] && is_process_running "$pid"; then
         print_info "Stopping node (PID: $pid)"
         stop_nacos_gracefully "$pid" 2 >/dev/null 2>&1 || true
