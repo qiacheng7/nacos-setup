@@ -308,6 +308,12 @@ _skill_scanner_ensure_venv_bin_in_path() {
 
 _skill_scanner_installed_in_venv() {
     local venv_python=$1
+    local venv_dir
+    venv_dir=$(dirname "$(dirname "$venv_python")")
+    # uv-managed venvs often have no pip module; the CLI is the reliable signal.
+    if [ -x "${venv_dir}/bin/skill-scanner" ]; then
+        return 0
+    fi
     _skill_scanner_runas_target_user "$venv_python" -m pip show "$SKILL_SCANNER_PYPI_PACKAGE" >/dev/null 2>&1
 }
 
