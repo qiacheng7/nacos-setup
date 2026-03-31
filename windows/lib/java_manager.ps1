@@ -151,11 +151,102 @@ function Get-BundledJdkUrl {
     return "$script:JDK17OssBase/jdk17-windows-$arch.zip"
 }
 
+function Test-JdkZipArchive($zipPath) {
+    if (-not (Test-Path -LiteralPath $zipPath)) { return $false }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        $full = (Resolve-Path -LiteralPath $zipPath).Path
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($full)
+        $zip.Dispose()
+        return $true
+    } catch {
+        Write-DebugLog "JDK zip validation failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Clear-DirectoryContents($dir) {
+    if (-not (Test-Path -LiteralPath $dir)) { return }
+    Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-TarExtractJdk($zipFullPath, $destinationDir) {
+    if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) { return $false }
+    Write-Info "Extracting JDK (tar; more reliable than Expand-Archive for large JDK zips)..."
+    try {
+        $p = Start-Process -FilePath "tar.exe" -ArgumentList @("-xf", $zipFullPath, "-C", $destinationDir) `
+            -Wait -PassThru -NoNewWindow
+        if ($p.ExitCode -ne 0) {
+            Write-Warn "tar.exe failed with exit code $($p.ExitCode)"
+            return $false
+        }
+        return $true
+    } catch {
+        Write-Warn "Could not run tar.exe: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# Expand-Archive on PS 5.1 can fail or misbehave on deep JDK layouts / long paths; prefer tar, then fallback.
+function Expand-BundledJdkZip($zipPath, $destinationDir) {
+    $zipFull = (Resolve-Path -LiteralPath $zipPath).Path
+    Ensure-Directory $destinationDir
+
+    if (Invoke-TarExtractJdk $zipFull $destinationDir) { return $true }
+
+    Clear-DirectoryContents $destinationDir
+    Write-Info "Extracting JDK (Expand-Archive)..."
+    $prevProg = $ProgressPreference
+    $ProgressPreference = "SilentlyContinue"
+    try {
+        Expand-Archive -LiteralPath $zipFull -DestinationPath $destinationDir -Force
+        return $true
+    } catch {
+        Write-Warn "Expand-Archive failed: $($_.Exception.Message)"
+    } finally {
+        $ProgressPreference = $prevProg
+    }
+
+    $shortTmp = Join-Path $env:TEMP ("nacos-jre-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        Clear-DirectoryContents $destinationDir
+        Ensure-Directory $destinationDir
+        Ensure-Directory $shortTmp
+        Write-Info "Retrying extraction under short path (avoids Windows MAX_PATH issues): $shortTmp"
+        if (Invoke-TarExtractJdk $zipFull $shortTmp) {
+            Get-ChildItem -LiteralPath $shortTmp -Force | ForEach-Object {
+                Move-Item -LiteralPath $_.FullName -Destination $destinationDir -Force
+            }
+            return $true
+        }
+        Clear-DirectoryContents $shortTmp
+        Expand-Archive -LiteralPath $zipFull -DestinationPath $shortTmp -Force
+        Get-ChildItem -LiteralPath $shortTmp -Force | ForEach-Object {
+            Move-Item -LiteralPath $_.FullName -Destination $destinationDir -Force
+        }
+        return $true
+    } catch {
+        Write-Warn "Short-path extraction failed: $($_.Exception.Message)"
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $shortTmp) {
+            Remove-Item -LiteralPath $shortTmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Find-JavaBinaryInDir($root) {
-    if (-not (Test-Path $root)) { return $null }
-    $hits = Get-ChildItem -Path $root -Recurse -Filter "java.exe" -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '\\bin\\java\.exe$' } |
-        Select-Object -First 1
+    if (-not (Test-Path -LiteralPath $root)) { return $null }
+    # Typical layout: <root>/jdk-17.../bin/java.exe — use LiteralPath for names containing '+'.
+    $directBin = Join-Path $root "bin\java.exe"
+    if (Test-Path -LiteralPath $directBin) { return (Resolve-Path -LiteralPath $directBin).Path }
+    foreach ($d in Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue) {
+        $cand = Join-Path $d.FullName "bin\java.exe"
+        if (Test-Path -LiteralPath $cand) { return (Resolve-Path -LiteralPath $cand).Path }
+    }
+    $hits = Get-ChildItem -LiteralPath $root -Recurse -Filter "java.exe" -Depth 6 -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\bin\\java\.exe$' } | Select-Object -First 1
     if ($hits) { return $hits.FullName }
     return $null
 }
@@ -213,15 +304,20 @@ function Install-BundledJre17 {
         }
     }
 
+    if (-not (Test-JdkZipArchive $cached)) {
+        Write-Warn "JDK zip is missing, incomplete, or not a valid archive: $cached"
+        Write-Warn "Delete this file and run nacos-setup again to re-download, or replace it with a complete jdk17-windows-amd64.zip from OSS."
+        Remove-Item -LiteralPath $cached -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
     $root = $script:BundledJreRoot
     if (Test-Path $root) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
     Ensure-Directory $root
 
     Write-Info "Extracting JDK 17 into $root..."
-    try {
-        Expand-Archive -Path $cached -DestinationPath $root -Force
-    } catch {
-        Write-Warn "Failed to extract JDK 17: $($_.Exception.Message)"
+    if (-not (Expand-BundledJdkZip $cached $root)) {
+        Write-Warn "Failed to extract JDK 17. Try: run as Administrator, check disk space, or extract $cached manually under $root"
         return $false
     }
 
