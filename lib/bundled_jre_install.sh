@@ -326,7 +326,8 @@ _bundled_jdk_acquire_zip() {
     fi
 
     print_detail "Downloading JDK 17: $url"
-    # Non-verbose used curl -s; some hosts fail with -s while -# works (same as -x). Hide bar via 2>/dev/null; </dev/null avoids stdin reads.
+    # Do not use curl -s nor redirect curl stderr to /dev/null: some environments fail immediately
+    # while -x works. zip_path=$(...) only captures stdout; curl progress/errors use stderr.
     if [ "${VERBOSE:-false}" = true ]; then
         echo ""
         if ! curl -fL -# -o "$cached_file" "$url" </dev/null; then
@@ -337,10 +338,19 @@ _bundled_jdk_acquire_zip() {
         fi
         echo ""
     else
-        if ! curl -fL -# -o "$cached_file" "$url" </dev/null 2>/dev/null; then
-            print_error "Failed to download JDK 17." >&2
-            rm -f "$cached_file" 2>/dev/null || true
-            return 1
+        # Prefer --no-progress-meter (quiet, stderr still open) when available; else same as -x (-#).
+        if curl --help 2>&1 | grep -q -- '--no-progress-meter'; then
+            if ! curl -fL --no-progress-meter -o "$cached_file" "$url" </dev/null; then
+                print_error "Failed to download JDK 17." >&2
+                rm -f "$cached_file" 2>/dev/null || true
+                return 1
+            fi
+        else
+            if ! curl -fL -# -o "$cached_file" "$url" </dev/null; then
+                print_error "Failed to download JDK 17." >&2
+                rm -f "$cached_file" 2>/dev/null || true
+                return 1
+            fi
         fi
     fi
 
