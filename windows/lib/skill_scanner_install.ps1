@@ -341,6 +341,12 @@ function Get-SkillScannerCommandPath {
     return $null
 }
 
+# Java / Nacos read application.properties reliably with forward slashes on Windows (align with typical JVM path handling).
+function Convert-SkillScannerCommandPathForNacos([string]$path) {
+    if ([string]::IsNullOrWhiteSpace($path)) { return $path }
+    return $path -replace '\\', '/'
+}
+
 function Set-SkillScannerProperties($configFile) {
     if (-not $configFile -or -not (Test-Path $configFile)) {
         Write-SkillScannerTrace "skip: config file not found ($configFile)"
@@ -353,7 +359,8 @@ function Set-SkillScannerProperties($configFile) {
 
     $scannerCmd = Get-SkillScannerCommandPath
     if ($scannerCmd) {
-        Update-ConfigProperty $configFile "nacos.plugin.ai-pipeline.skill-scanner.command" $scannerCmd
+        $cmdForNacos = Convert-SkillScannerCommandPathForNacos $scannerCmd
+        Update-ConfigProperty $configFile "nacos.plugin.ai-pipeline.skill-scanner.command" $cmdForNacos
     }
     Write-Info "skill-scanner plugin properties configured."
 }

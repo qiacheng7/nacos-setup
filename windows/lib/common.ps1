@@ -142,8 +142,14 @@ function Update-ConfigProperty($configFile, $key, $value) {
     # Match both commented (#key=value) and uncommented (key=value) lines
     $pattern = "(?m)^#?\s*" + [Regex]::Escape($key) + "\s*=.*$"
     if ($lines -match $pattern) {
-        # Replace with uncommented version (avoid "$key=$value`n" parsing edge cases in PS 5.1)
-        $lines = [Regex]::Replace($lines, $pattern, ('{0}={1}' -f $key, $value))
+        # Use MatchEvaluator: Regex.Replace substitution string treats \U, \E, $n etc. as special,
+        # so Windows paths like C:\Users\... get corrupted. A scriptblock avoids substitution rules.
+        $k = $key
+        $v = $value
+        $lines = [Regex]::Replace($lines, $pattern, {
+            param($match)
+            return '{0}={1}' -f $k, $v
+        })
     } else {
         $nl = [Environment]::NewLine
         if (-not $lines.EndsWith($nl)) { $lines += $nl }
