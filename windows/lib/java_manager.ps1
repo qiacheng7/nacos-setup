@@ -232,7 +232,8 @@ function Install-BundledJre17 {
 # Prompt user (Y/n) for bundled JRE download.
 # Returns $true if user accepts, $false if declined or non-interactive.
 function Confirm-BundledJreInstall {
-    $prompt = "Java 17+ not found. Download JDK 17 from Nacos OSS into $($script:BundledJreRoot)? (Y/n): "
+    $dl = Get-BundledJdkUrl
+    $prompt = "Java 17+ not found. Download JDK 17 from OSS ($dl) and install under $($script:BundledJreRoot)? (Y/n): "
     try {
         $answer = Read-Host $prompt
         if ($answer -match '^[Nn]') { return $false }
@@ -248,8 +249,9 @@ function Ensure-BundledJava17ForNacosSetup($nacosVersion) {
     if ($env:NACOS_SETUP_SKIP_BUNDLED_JRE -in @("1","true","TRUE")) { return $true }
 
     $major = 0
-    if ($nacosVersion) {
-        try { $major = [int]($nacosVersion -replace '[^0-9].*$','').Split('.')[0] } catch {}
+    $ver = if ($nacosVersion) { $nacosVersion.Trim() } else { "" }
+    if ($ver) {
+        try { $major = [int](($ver.Split('.'))[0]) } catch { $major = 0 }
     }
     if ($major -lt 3) { return $true }  # Nacos 2.x needs only Java 8+
 
@@ -280,4 +282,14 @@ function Ensure-BundledJava17ForNacosSetup($nacosVersion) {
     }
 
     return (Install-BundledJre17)
+}
+
+# Bundled JDK 17 (interactive OSS download) for Nacos 3.x when needed, then verify Java.
+function Invoke-JavaGateForNacosInstall($nacosVersion, $advancedMode) {
+    if (Get-Command Ensure-BundledJava17ForNacosSetup -ErrorAction SilentlyContinue) {
+        if (-not (Ensure-BundledJava17ForNacosSetup $nacosVersion)) {
+            return $false
+        }
+    }
+    return (Check-JavaRequirements $nacosVersion $advancedMode)
 }

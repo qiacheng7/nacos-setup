@@ -91,8 +91,8 @@ function Invoke-StandaloneMode {
     Write-Info "Installation directory: $($Global:InstallDir)"
     Write-Host ""
     
-    # Check Java requirements
-    if (-not (Check-JavaRequirements $Global:Version $Global:AdvancedMode)) {
+    # Check Java requirements (bundled JRE 3.x + verify)
+    if (-not (Invoke-JavaGateForNacosInstall $Global:Version $Global:AdvancedMode)) {
         Invoke-StandaloneCleanup 1
     }
     Write-Host ""

@@ -159,6 +159,7 @@ function Initialize-Version {
     if ($fetchedVersion) {
         $script:DefaultVersion = $fetchedVersion
         $script:Version = $fetchedVersion
+        $Global:Version = $fetchedVersion
     }
 }
 
@@ -461,7 +462,7 @@ function Run-Standalone {
         }
     }
 
-    if (-not (Check-JavaRequirements $Global:Version $Global:AdvancedMode)) { exit 1 }
+    if (-not (Invoke-JavaGateForNacosInstall $Global:Version $Global:AdvancedMode)) { exit 1 }
 
     $zip = Download-Nacos $Global:Version
     $extracted = Extract-NacosToTemp $zip
@@ -585,7 +586,7 @@ function Run-Cluster {
     }
     Ensure-Directory $clusterDir
 
-    if (-not (Check-JavaRequirements $Global:Version $Global:AdvancedMode)) { exit 1 }
+    if (-not (Invoke-JavaGateForNacosInstall $Global:Version $Global:AdvancedMode)) { exit 1 }
 
     $zip = Download-Nacos $Global:Version
     Configure-Cluster-Security $clusterDir $Global:AdvancedMode
@@ -732,14 +733,6 @@ try {
     }
 
     Validate-Arguments
-
-    # Bundled JRE check for Nacos 3.x: download from OSS when Java 17+ is missing
-    if (Get-Command Ensure-BundledJava17ForNacosSetup -ErrorAction SilentlyContinue) {
-        if (-not (Ensure-BundledJava17ForNacosSetup $Global:Version)) {
-            Write-Info "Exiting: Java 17+ is required for Nacos $($Global:Version)."
-            exit 0
-        }
-    }
 
     switch ($Global:Mode) {
         "standalone" { Run-Standalone }

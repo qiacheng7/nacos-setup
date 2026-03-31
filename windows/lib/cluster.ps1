@@ -163,8 +163,8 @@ function New-Cluster {
     Write-Info "Cluster directory: $clusterDir"
     Write-Host ""
     
-    # Check Java
-    if (-not (Check-JavaRequirements $Global:Version $Global:AdvancedMode)) {
+    # Check Java (bundled JRE 3.x + verify)
+    if (-not (Invoke-JavaGateForNacosInstall $Global:Version $Global:AdvancedMode)) {
         Invoke-ClusterCleanup 1
     }
     Write-Host ""
@@ -530,8 +530,8 @@ function Join-ClusterMode {
     Write-Info "New node: $newNodeName"
     Write-Host ""
     
-    # Check Java
-    if (-not (Check-JavaRequirements $Global:Version $Global:AdvancedMode)) {
+    # Check Java (bundled JRE 3.x + verify)
+    if (-not (Invoke-JavaGateForNacosInstall $Global:Version $Global:AdvancedMode)) {
         Invoke-ClusterCleanup 1
     }
     
