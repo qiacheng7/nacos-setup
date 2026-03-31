@@ -41,6 +41,12 @@ function Apply-DatasourceConfig($configFile, $datasourceFile) {
             Update-ConfigProperty $configFile $key $value
         }
     }
+    $joined = ($lines | ForEach-Object { $_ }) -join "`n"
+    if (($joined -match 'spring\.(sql\.init|datasource)\.platform\s*=\s*postgresql') -or ($joined -match '(?m)^db\.url\.\d+=jdbc:postgresql:')) {
+        if ($joined -notmatch '(?m)^db\.pool\.config\.driverClassName=') {
+            Update-ConfigProperty $configFile "db.pool.config.driverClassName" "org.postgresql.Driver"
+        }
+    }
     return $true
 }
 
@@ -233,6 +239,15 @@ function Edit-DatasourceConfig($configName = $null) {
         "db.user.0=$dbUser",
         "db.password.0=$passPlain"
     )
+    if ($dbType -eq "postgresql") {
+        $configLines += @(
+            "db.pool.config.connectionTimeout=30000",
+            "db.pool.config.validationTimeout=10000",
+            "db.pool.config.maximumPoolSize=20",
+            "db.pool.config.minimumIdle=2",
+            "db.pool.config.driverClassName=org.postgresql.Driver"
+        )
+    }
     $configLines | Set-Content -Path $targetFile -Encoding UTF8
 
     Write-Host ""

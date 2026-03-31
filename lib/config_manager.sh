@@ -80,7 +80,17 @@ apply_datasource_config() {
                 
                 update_config_property "$config_file" "$key" "$value"
             done < "$datasource_file"
-            
+
+            # PostgreSQL 外置库：HikariCP 需显式指定 JDBC 驱动类
+            local ds_effective
+            ds_effective=$(grep -v '^[[:space:]]*#' "$datasource_file" | grep -v '^[[:space:]]*$' || true)
+            if echo "$ds_effective" | grep -qE 'spring\.(sql\.init|datasource)\.platform=postgresql' || \
+               echo "$ds_effective" | grep -qE '^db\.url\.[0-9]+=jdbc:postgresql:'; then
+                if ! echo "$ds_effective" | grep -qE '^db\.pool\.config\.driverClassName='; then
+                    update_config_property "$config_file" "db.pool.config.driverClassName" "org.postgresql.Driver"
+                fi
+            fi
+
             return 0
         fi
     fi
@@ -195,6 +205,12 @@ configure_datasource_interactive() {
         return 1
     fi
 
+    # PostgreSQL 时写入 HikariCP 驱动类（变量展开需非引号 EOF）
+    local pg_driver_line=""
+    if [ "$db_platform" = "postgresql" ]; then
+        pg_driver_line="db.pool.config.driverClassName=org.postgresql.Driver"
+    fi
+
     # Write configuration
     if ! cat > "$config_file" 2>/dev/null << EOF
 # Nacos External Datasource Configuration
@@ -218,6 +234,7 @@ db.pool.config.connectionTimeout=30000
 db.pool.config.validationTimeout=10000
 db.pool.config.maximumPoolSize=20
 db.pool.config.minimumIdle=2
+$pg_driver_line
 EOF
     then
         print_error "Cannot write to file: $config_file"
