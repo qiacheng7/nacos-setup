@@ -42,9 +42,32 @@ function Ensure-Directory($path) {
     if (-not (Test-Path $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
 }
 
+function Get-NormalizedPath($path) {
+    if (-not $path) { return $null }
+    try {
+        return [System.IO.Path]::GetFullPath($path.TrimEnd('\', '/'))
+    } catch {
+        return $path
+    }
+}
+
+function Test-PathInPathList($dirNorm, $pathList) {
+    if (-not $pathList) { return $false }
+    foreach ($seg in ($pathList.Split(';') | Where-Object { $_ })) {
+        try {
+            if ([string]::Equals((Get-NormalizedPath $seg), $dirNorm, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        } catch { }
+    }
+    return $false
+}
+
 function Add-ToUserPath($dir) {
+    $dirNorm = Get-NormalizedPath $dir
+    if (-not $dirNorm) { return }
     $current = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($current -and ($current.Split(';') -contains $dir)) {
+    if (Test-PathInPathList $dirNorm $current) {
         Write-Info "PATH already contains: $dir"
         return
     }
@@ -56,7 +79,8 @@ function Add-ToUserPath($dir) {
 function Refresh-SessionPath {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path    = "$machinePath;$userPath"
+    # Avoid leading/trailing ';' when Machine or User is empty (breaks command lookup)
+    $env:Path = (@($machinePath, $userPath) | Where-Object { $_ }) -join ';'
     Write-Info "PATH refreshed in current session"
 }
 
@@ -312,10 +336,17 @@ function Uninstall-NacosSetup {
         Write-Warn "nacos-cli not found at: $CliInstallDir"
     }
 
-    # Remove from User PATH
+    # Remove from User PATH (normalize so removal matches Add-ToUserPath)
+    $setupNorm = Get-NormalizedPath $SetupRootDir
+    $cliNorm   = Get-NormalizedPath $CliInstallDir
     $current = [Environment]::GetEnvironmentVariable("Path", "User")
     if ($current) {
-        $parts   = $current.Split(';') | Where-Object { $_ -ne $SetupRootDir -and $_ -ne $CliInstallDir }
+        $parts = foreach ($seg in ($current.Split(';') | Where-Object { $_ })) {
+            $sn = Get-NormalizedPath $seg
+            if ($sn -and $setupNorm -and [string]::Equals($sn, $setupNorm, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            if ($sn -and $cliNorm   -and [string]::Equals($sn, $cliNorm,   [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            $seg
+        }
         [Environment]::SetEnvironmentVariable("Path", ($parts -join ';'), "User")
         Write-Success "Removed install directories from PATH"
     }
@@ -418,6 +449,11 @@ function Install-NacosCli {
     Remove-Item $extractDir -Recurse -Force
 
     Add-ToUserPath $CliInstallDir
+
+    if ($realUserProfile -and $env:USERPROFILE -and
+        -not [string]::Equals((Get-NormalizedPath $realUserProfile), (Get-NormalizedPath $env:USERPROFILE), [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Warn "Binaries are under $realUserProfile but User PATH applies to this account ($env:USERPROFILE). If nacos-cli is not found, add this folder to PATH for the account that owns the install: $CliInstallDir"
+    }
 
     Write-Host ""
     Write-Success "nacos-cli $($Global:NacosCliVersion) installed!"
@@ -561,8 +597,12 @@ function Print-UsageInfo {
 if ($InstallCli) {
     # --cli: install nacos-cli only
     Write-Info "Installing nacos-cli only..."
-    Install-NacosCli
+    if (-not (Install-NacosCli)) {
+        Write-ErrorMsg "nacos-cli installation failed."
+        exit 1
+    }
     Refresh-SessionPath
+    Write-Info "You can run nacos-cli in this PowerShell window now. If you used a separate window to start the installer, open a new terminal so PATH picks up the user environment."
     exit 0
 }
 
