@@ -72,8 +72,8 @@ function Invoke-ClusterCleanup {
     exit $ExitCode
 }
 
-# Register cleanup trap
-$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Invoke-ClusterCleanup }
+# Do not register PowerShell.Exiting here: dot-sourced into nacos-setup.ps1; exit in Exiting
+# handlers can flash-close the console. Use nacos-setup.ps1 try/finally for host cleanup.
 
 # ============================================================================
 # Node Startup

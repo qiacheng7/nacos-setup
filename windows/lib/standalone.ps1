@@ -70,8 +70,9 @@ function Invoke-StandaloneCleanup {
     exit $ExitCode
 }
 
-# Register cleanup trap
-$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Invoke-StandaloneCleanup }
+# Do not register PowerShell.Exiting here: this library is dot-sourced by nacos-setup.ps1,
+# and calling exit from an Exiting subscriber can terminate the host abruptly. Host cleanup
+# is handled by nacos-setup.ps1 (try/finally + its own Exiting handler).
 
 # ============================================================================
 # Main Standalone Installation

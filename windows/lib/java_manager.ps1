@@ -152,8 +152,16 @@ function Get-BundledJdkUrl {
 }
 
 function Find-JavaBinaryInDir($root) {
-    if (-not (Test-Path $root)) { return $null }
-    $hits = Get-ChildItem -Path $root -Recurse -Filter "java.exe" -ErrorAction SilentlyContinue |
+    if (-not (Test-Path -LiteralPath $root)) { return $null }
+    # OSS bundles (e.g. jdk17-windows-amd64.zip) use one top-level folder: jdk-17.x+jre/bin/java.exe
+    try {
+        $childDirs = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction Stop)
+        if ($childDirs.Count -eq 1) {
+            $candidate = Join-Path $childDirs[0].FullName "bin\java.exe"
+            if (Test-Path -LiteralPath $candidate) { return $candidate }
+        }
+    } catch {}
+    $hits = Get-ChildItem -LiteralPath $root -Recurse -Filter "java.exe" -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -match '\\bin\\java\.exe$' } |
         Select-Object -First 1
     if ($hits) { return $hits.FullName }
@@ -161,68 +169,32 @@ function Find-JavaBinaryInDir($root) {
 }
 
 function Apply-BundledJavaHomeFromDir($root) {
-    $javaBin = Find-JavaBinaryInDir $root
-    if (-not $javaBin) { return $false }
-    $ver = Get-JavaVersion $javaBin
-    if ($ver -lt 17) { return $false }
-    $javaHome = Split-Path (Split-Path $javaBin -Parent) -Parent
-    $env:JAVA_HOME = $javaHome
-    $env:PATH = "$javaHome\bin;$env:PATH"
-    Write-DebugLog "Set JAVA_HOME=$javaHome"
-    return $true
+    try {
+        $javaBin = Find-JavaBinaryInDir $root
+        if (-not $javaBin) {
+            Write-Warn "No java.exe found under extracted JDK root: $root"
+            return $false
+        }
+        $ver = Get-JavaVersion $javaBin
+        if ($ver -lt 17) {
+            Write-Warn "Bundled java at $javaBin reports version $ver (need 17+)"
+            return $false
+        }
+        $javaHome = Split-Path (Split-Path $javaBin -Parent) -Parent
+        $env:JAVA_HOME = $javaHome
+        $env:PATH = "$javaHome\bin;$env:PATH"
+        Write-DebugLog "Set JAVA_HOME=$javaHome"
+        return $true
+    } catch {
+        Write-Warn "Failed to apply bundled JAVA_HOME: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Test-BundledJrePresent {
     $root = $script:BundledJreRoot
     if (-not (Test-Path $root)) { return $false }
     return (Apply-BundledJavaHomeFromDir $root)
-}
-
-function Test-ZipFileReadable($path) {
-    if (-not (Test-Path -LiteralPath $path)) { return $false }
-    if ((Get-Item -LiteralPath $path).Length -eq 0) { return $false }
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue | Out-Null
-        $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $path).Path)
-        $zip.Dispose()
-        return $true
-    } catch {
-        return $false
-    }
-}
-
-function Expand-BundledJdkZip($zipPath, $destRoot) {
-    $zipResolved = (Resolve-Path -LiteralPath $zipPath).Path
-    $len = (Get-Item -LiteralPath $zipResolved).Length
-    Write-NacosSetupLog "JDK extract start: zip=$zipResolved sizeBytes=$len dest=$destRoot ps=$($PSVersionTable.PSVersion)"
-    try {
-        Expand-Archive -LiteralPath $zipResolved -DestinationPath $destRoot -Force -ErrorAction Stop
-        Write-NacosSetupLog "JDK extract OK (Expand-Archive)"
-        return $true
-    } catch {
-        $rec = $_
-        Write-NacosSetupLog "Expand-Archive FAILED: $($rec.Exception.Message)"
-        Write-NacosSetupLog "$($rec.InvocationInfo.PositionMessage)"
-        if ($rec.ScriptStackTrace) { Write-NacosSetupLog "$($rec.ScriptStackTrace)" }
-        Write-Warn "Expand-Archive failed: $($rec.Exception.Message); retrying with .NET ZipFile..."
-        try {
-            if (Test-Path -LiteralPath $destRoot) {
-                Remove-Item -LiteralPath $destRoot -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            Ensure-Directory $destRoot
-            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop | Out-Null
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($zipResolved, (Resolve-Path -LiteralPath $destRoot).Path)
-            Write-NacosSetupLog "JDK extract OK (ZipFile.ExtractToDirectory)"
-            return $true
-        } catch {
-            $rec2 = $_
-            Write-NacosSetupLog "ZipFile::ExtractToDirectory FAILED: $($rec2.Exception.Message)"
-            if ($rec2.ScriptStackTrace) { Write-NacosSetupLog "$($rec2.ScriptStackTrace)" }
-            Write-Warn "Failed to extract JDK 17: $($rec2.Exception.Message)"
-            Write-Host "[INFO] Full detail: $(Get-NacosSetupLogFile)" -ForegroundColor Cyan
-            return $false
-        }
-    }
 }
 
 function Install-BundledJre17 {
@@ -253,9 +225,6 @@ function Install-BundledJre17 {
             }
         } catch {
             Write-Warn "Failed to download bundled JDK 17: $($_.Exception.Message)"
-            Write-NacosSetupLog "JDK download failed: $($_.Exception.Message)" "ERROR"
-            if ($_.ScriptStackTrace) { Write-NacosSetupLog "$($_.ScriptStackTrace)" "ERROR" }
-            Write-Host "[INFO] See log: $(Get-NacosSetupLogFile)" -ForegroundColor Cyan
             Remove-Item $cached -ErrorAction SilentlyContinue
             return $false
         } finally {
@@ -267,26 +236,20 @@ function Install-BundledJre17 {
     if (Test-Path $root) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
     Ensure-Directory $root
 
-    if (-not (Test-ZipFileReadable $cached)) {
-        Write-Warn "JDK zip missing, empty, or unreadable: $cached"
-        Write-NacosSetupLog "JDK zip invalid or unreadable: $cached" "ERROR"
-        Write-Host "[INFO] See log: $(Get-NacosSetupLogFile)" -ForegroundColor Cyan
-        return $false
-    }
-
     Write-Info "Extracting JDK 17 into $root..."
-    if (-not (Expand-BundledJdkZip $cached $root)) {
+    try {
+        Expand-Archive -Path $cached -DestinationPath $root -Force -ErrorAction Stop
+    } catch {
+        Write-Warn "Failed to extract JDK 17: $($_.Exception.Message)"
         return $false
     }
 
+    Write-Info "Verifying bundled JDK layout..."
     if (Apply-BundledJavaHomeFromDir $root) {
         Write-Info "Bundled JDK 17 ready: JAVA_HOME=$env:JAVA_HOME"
-        Write-NacosSetupLog "Bundled JDK OK JAVA_HOME=$($env:JAVA_HOME)"
         return $true
     }
     Write-Warn "Extracted archive does not contain a usable Java 17 binary"
-    Write-NacosSetupLog "JDK tree at $root has no usable java.exe (Java 17+)" "ERROR"
-    Write-Host "[INFO] See log: $(Get-NacosSetupLogFile)" -ForegroundColor Cyan
     return $false
 }
 
