@@ -588,11 +588,6 @@ install_nacos_cli() {
 # PATH: ensure ~/.nacos/bin is on PATH (shell rc + optional current session)
 # ============================================================================
 
-# True when this script is sourced (.) into the current shell; false when run as bash nacos-installer.sh
-_installer_is_sourced() {
-    [[ "${BASH_SOURCE[0]}" != "$0" ]]
-}
-
 # Resolve which rc file to append the PATH line to (macOS/Linux differ for bash).
 _resolve_shell_rc_for_path() {
     local shell_config=""
@@ -631,28 +626,14 @@ _resolve_shell_rc_for_path() {
     printf '%s' "$shell_config"
 }
 
-# If login shell reads ~/.bash_profile but not ~/.bashrc, also persist PATH there (common for root on Linux).
-_append_path_to_bash_profile_if_login_shell_wont_load_bashrc() {
-    local path_export_line=$1
-    local primary_rc=$2
-    [[ "$primary_rc" == "$HOME/.bashrc" ]] || return 0
-    [ -f "$HOME/.bash_profile" ] || return 0
-    if grep -qE '\.bashrc|bashrc' "$HOME/.bash_profile" 2>/dev/null; then
-        return 0
-    fi
-    if grep -qF "$path_export_line" "$HOME/.bash_profile" 2>/dev/null; then
-        return 0
-    fi
-    echo "" >> "$HOME/.bash_profile"
-    echo "# Added by nacos-setup installer (login shell does not source ~/.bashrc)" >> "$HOME/.bash_profile"
-    echo "$path_export_line" >> "$HOME/.bash_profile"
-    print_success "PATH also configured in $HOME/.bash_profile (for login shells)"
+# True only when this script was sourced (e.g. source nacos-installer.sh), so export
+# affects the caller's shell. When run as "bash nacos-installer.sh", this is false:
+# a child process cannot change the parent interactive shell's environment.
+_nacos_installer_can_affect_calling_shell() {
+    [[ -n "${BASH_VERSION:-}" ]] && [[ "${BASH_SOURCE[0]}" != "${0}" ]]
 }
 
 ensure_nacos_bin_in_path() {
-    local path_export_line='export PATH="$HOME/.nacos/bin:$PATH"'
-    local shell_config=""
-
     # Check if BIN_DIR is already in PATH
     case ":$PATH:" in
         *":$BIN_DIR:"*)
@@ -661,9 +642,11 @@ ensure_nacos_bin_in_path() {
         *)
             print_info "Configuring PATH automatically..."
 
+            local shell_config
             shell_config=$(_resolve_shell_rc_for_path)
 
             # Check if the export line already exists in the config file (idempotent)
+            local path_export_line='export PATH="$HOME/.nacos/bin:$PATH"'
             if grep -qF "$path_export_line" "$shell_config" 2>/dev/null; then
                 print_info "PATH already configured in $shell_config"
             else
@@ -672,31 +655,22 @@ ensure_nacos_bin_in_path() {
                 echo "$path_export_line" >> "$shell_config"
                 print_success "PATH configured in $shell_config"
             fi
-            # Login shells on some Linux images read ~/.bash_profile but not ~/.bashrc
-            _append_path_to_bash_profile_if_login_shell_wont_load_bashrc "$path_export_line" "$shell_config"
 
-            # Ask user whether to activate PATH now
-            local REPLY=""
-            if [ -t 0 ]; then
-                read -p "Activate PATH now? (Y/n): " -r REPLY
-                echo ""
-            fi
+            # Ask user whether to show / apply PATH for the current terminal
+            read -p "Show command to use nacos-cli in this terminal now? (Y/n): " -r REPLY
+            echo ""
             if [[ "$REPLY" =~ ^[Nn]$ ]]; then
-                print_info "To activate PATH manually, run: source $shell_config"
-                print_info "Or open a new terminal session."
+                print_info "To use nacos-cli later in this shell, run: source $shell_config"
+                print_info "Or open a new terminal (login shells load the file above)."
             else
-                export PATH="$HOME/.nacos/bin:$PATH"
-                if _installer_is_sourced; then
+                if _nacos_installer_can_affect_calling_shell; then
+                    export PATH="$HOME/.nacos/bin:$PATH"
                     print_success "PATH has been activated in the current shell."
                 else
-                    print_success "PATH is active for this installer process only."
-                    echo ""
-                    print_info "You ran this script with \`bash nacos-installer.sh\`, so your interactive shell did not inherit PATH."
-                    print_info "Run this in your current terminal to use nacos-cli now:"
-                    echo "    source $shell_config"
-                    echo ""
-                    print_info "Or one-shot:"
-                    echo "    $path_export_line"
+                    print_info "This installer runs as a subprocess; it cannot change your interactive shell's PATH."
+                    print_info "Run one of the following in this terminal, then use nacos-cli:"
+                    echo "  source $shell_config"
+                    echo "  export PATH=\"\$HOME/.nacos/bin:\$PATH\""
                 fi
             fi
             ;;
@@ -960,7 +934,7 @@ main() {
         fi
         echo ""
         ensure_nacos_bin_in_path
-        print_info "Try: nacos-cli --help"
+        print_info "After PATH is loaded in your shell (see above), run: nacos-cli --help"
         exit 0
     fi
 
