@@ -194,7 +194,20 @@ function Install-Uv {
             return $false
         }
         $env:UV_PRINT_QUIET = "1"
-        Invoke-Expression $installScript
+        # Simple UI: hide uv install script banner (align with bash quiet install); full output with -x/--verbose
+        $verboseInstall = $false
+        if (Get-Command Test-NacosSetupVerbose -ErrorAction SilentlyContinue) { $verboseInstall = Test-NacosSetupVerbose }
+        if ($verboseInstall) {
+            Invoke-Expression $installScript
+        } else {
+            $installLog = Join-Path $env:TEMP ("uv-official-install-out-" + [Guid]::NewGuid().ToString() + ".log")
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                & { Invoke-Expression $installScript } *> $installLog
+            } else {
+                & { Invoke-Expression $installScript } > $installLog 2>&1
+            }
+            Remove-Item -LiteralPath $installLog -Force -ErrorAction SilentlyContinue
+        }
         Refresh-PathForUv
         if (Test-UvOnPath) {
             Write-Detail "uv installed: $((Get-Command uv).Source)"
@@ -392,6 +405,7 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
     # Already installed in venv?
     if ((Test-Path $venvPython) -and (Test-SkillScannerInVenv $venvDir)) {
         $script:SkillScannerInstalled = $true
+        # Align with bash: one concise [INFO] line in simple UI when stack is already present
         Write-Info "skill-scanner already installed in $venvDir (skip)."
         return
     }
@@ -409,7 +423,7 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
     $hasPy = $null -ne (Find-Python310Plus)
     Write-Detail "Skill-scanner prerequisites: uv=$hasUv; Python 3.10+=$hasPy"
 
-    # Prompt user (descriptions only in verbose; prompts always visible)
+    # Prompt user (keep prompts; hide preamble unless -x/--verbose)
     Write-Detail "Optional: Cisco skill-scanner for Nacos $nacosVersion"
     Write-Detail "  This will install: uv + Python 3.10+ + $($script:SkillScannerPypiPackage) under ~/ai-infra/.venv"
     try {
