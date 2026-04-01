@@ -14,6 +14,8 @@ function Download-File($url, $output) {
     $headers = @{
         "Referer" = $Global:RefererUrl
     }
+    Write-Host "Downloading from URL: $url"
+    Write-Host "Headers: $headers"
     $prevProgress = $ProgressPreference
     $ProgressPreference = "SilentlyContinue"
     try {
