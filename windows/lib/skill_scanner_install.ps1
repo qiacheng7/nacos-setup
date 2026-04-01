@@ -172,7 +172,7 @@ function Refresh-PathForUv {
 
 # Install uv via the official Windows PowerShell installer
 function Install-Uv {
-    Write-Info "Installing uv (https://astral.sh/uv/) via official installer..."
+    Write-Detail "Installing uv (https://astral.sh/uv/) via official installer..."
     $tmpScript = $null
     try {
         # Avoid Invoke-WebRequest .Content as string: on some hosts it is byte[] and breaks Invoke-Expression.
@@ -197,7 +197,7 @@ function Install-Uv {
         Invoke-Expression $installScript
         Refresh-PathForUv
         if (Test-UvOnPath) {
-            Write-Info "uv installed: $((Get-Command uv).Source)"
+            Write-Detail "uv installed: $((Get-Command uv).Source)"
             return $true
         }
         Write-Warn "uv was installed but is not on PATH. Open a new terminal or add the install directory to PATH."
@@ -234,19 +234,19 @@ function Ensure-Python310WithUv {
     $py = Find-Python310Plus
     if ($py) { return $py }
 
-    Write-Info "No Python 3.10+ on PATH; uv can install Python 3.10."
+    Write-Detail "No Python 3.10+ on PATH; uv can install Python 3.10."
     try {
         $answer = Read-Host "Install Python 3.10 with uv now? (Y/n)"
         if ($answer -match '^[Nn]') {
-            Write-Info "Skipping uv-managed Python 3.10."
+            Write-Detail "Skipping uv-managed Python 3.10."
             return $null
         }
     } catch {
-        Write-Info "Non-interactive: skipping uv-managed Python 3.10."
+        Write-Detail "Non-interactive: skipping uv-managed Python 3.10."
         return $null
     }
 
-    Write-Info "Installing Python 3.10 with uv (this may take a moment)..."
+    Write-Detail "Installing Python 3.10 with uv (this may take a moment)..."
     $pyExit = Invoke-NacosUv -ArgumentList @('python', 'install', '3.10') -SuppressStreams:(-not (Test-NacosSetupVerbose))
     if ($pyExit -ne 0) {
         Write-Warn "uv python install 3.10 failed (exit code $pyExit)."
@@ -260,7 +260,7 @@ function Ensure-Python310WithUv {
     $pyLines = Get-NacosUvTextLines -ArgumentList @('python', 'find', '3.10')
     $pyPath = Normalize-UvCommandOutput $pyLines
     if ($pyPath -and (Test-Path -LiteralPath $pyPath)) {
-        Write-Info "Python 3.10 ready: $pyPath"
+        Write-Detail "Python 3.10 ready: $pyPath"
         return $pyPath
     }
 
@@ -352,7 +352,7 @@ function Set-SkillScannerProperties($configFile) {
         Write-SkillScannerTrace "skip: config file not found ($configFile)"
         return
     }
-    Write-Info "Configuring skill-scanner plugin properties in $configFile"
+    Write-Detail "Configuring skill-scanner plugin properties in $configFile"
     Update-ConfigProperty $configFile "nacos.plugin.ai-pipeline.enabled" "true"
     Update-ConfigProperty $configFile "nacos.plugin.ai-pipeline.type" "skill-scanner"
     Update-ConfigProperty $configFile "nacos.plugin.ai-pipeline.skill-scanner.enabled" "true"
@@ -362,7 +362,7 @@ function Set-SkillScannerProperties($configFile) {
         $cmdForNacos = Convert-SkillScannerCommandPathForNacos $scannerCmd
         Update-ConfigProperty $configFile "nacos.plugin.ai-pipeline.skill-scanner.command" $cmdForNacos
     }
-    Write-Info "skill-scanner plugin properties configured."
+    Write-Detail "skill-scanner plugin properties configured."
 }
 
 # ============================================================================
@@ -407,19 +407,19 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
     Refresh-PathForUv
     $hasUv = Test-UvOnPath
     $hasPy = $null -ne (Find-Python310Plus)
-    Write-Info "Skill-scanner prerequisites: uv=$hasUv; Python 3.10+=$hasPy"
+    Write-Detail "Skill-scanner prerequisites: uv=$hasUv; Python 3.10+=$hasPy"
 
-    # Prompt user
-    Write-Info "Optional: Cisco skill-scanner for Nacos $nacosVersion"
-    Write-Info "  This will install: uv + Python 3.10+ + $($script:SkillScannerPypiPackage) under ~/ai-infra/.venv"
+    # Prompt user (descriptions only in verbose; prompts always visible)
+    Write-Detail "Optional: Cisco skill-scanner for Nacos $nacosVersion"
+    Write-Detail "  This will install: uv + Python 3.10+ + $($script:SkillScannerPypiPackage) under ~/ai-infra/.venv"
     try {
         $answer = Read-Host "Install skill-scanner stack? (Y/n)"
         if ($answer -match '^[Nn]') {
-            Write-Info "Skipping skill-scanner / uv / Python setup. Continuing Nacos startup."
+            Write-Detail "Skipping skill-scanner / uv / Python setup. Continuing Nacos startup."
             return
         }
     } catch {
-        Write-Info "Non-interactive: skipping optional skill-scanner setup."
+        Write-Detail "Non-interactive: skipping optional skill-scanner setup."
         return
     }
 
@@ -428,7 +428,7 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
         Refresh-PathForUv
     }
     if (-not (Test-UvOnPath)) {
-        Write-Info "uv was not found on PATH."
+        Write-Detail "uv was not found on PATH."
         $doUv = $false
         if (Get-Command Test-NacosSetupInteractive -ErrorAction SilentlyContinue) {
             if (Test-NacosSetupInteractive) {
@@ -439,7 +439,7 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
             }
         }
         if (-not $doUv) {
-            Write-Info "Skipping uv installation."
+            Write-Detail "Skipping uv installation."
             Write-Warn "Cannot install $($script:SkillScannerPypiPackage) without uv."
             return
         }
@@ -459,7 +459,7 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
 
     # Create venv
     if (-not (Test-Path $venvPython)) {
-        Write-Info "Creating uv virtual environment in $venvDir..."
+        Write-Detail "Creating uv virtual environment in $venvDir..."
         if (-not (New-SkillScannerVenv $pyExe $venvDir)) {
             Write-Warn "Could not create uv virtual environment at $venvDir."
             return
@@ -468,14 +468,14 @@ function Invoke-MaybeInstallSkillScannerForNacos($nacosVersion) {
     }
 
     # Install skill-scanner
-    Write-Info "Installing $($script:SkillScannerPypiPackage) into $venvDir via uv..."
+    Write-Detail "Installing $($script:SkillScannerPypiPackage) into $venvDir via uv..."
     if (Install-SkillScannerInVenv $venvPython) {
         $script:SkillScannerInstalled = $true
         Add-VenvBinToPath $venvDir
         $binDir = Get-SkillScannerVenvBin $venvDir
-        Write-Info "Installed $($script:SkillScannerPypiPackage) in $venvDir."
-        Write-Info "Added $binDir to PATH (current session and PowerShell profile)."
-        Write-Info "Run with: $(Get-SkillScannerExePath $venvDir)"
+        Write-Detail "Installed $($script:SkillScannerPypiPackage) in $venvDir."
+        Write-Detail "Added $binDir to PATH (current session and PowerShell profile)."
+        Write-Detail "Run with: $(Get-SkillScannerExePath $venvDir)"
     } else {
         Write-Warn "Could not install $($script:SkillScannerPypiPackage) into $venvDir via uv."
         Write-Warn "Docs: https://github.com/cisco-ai-defense/skill-scanner"
