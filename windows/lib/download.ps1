@@ -38,13 +38,14 @@ function Download-File($url, $output) {
     $ProgressPreference = "SilentlyContinue"
     try {
         try {
+            Write-Host "Downloading from URL: $url"
+            Write-Host "Headers: $headers"
+
             if ($PSVersionTable.PSVersion.Major -lt 6) {
                 Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $output -Headers $headers -ErrorAction Stop
             } else {
                 Invoke-WebRequest -Uri $url -OutFile $output -Headers $headers -ErrorAction Stop
             }
-            Write-Host "Downloading from URL: $url"
-            Write-Host "Headers: $headers"
         } catch {
             Write-Warn "Invoke-WebRequest failed ($($_.Exception.Message)); retrying with WebClient..."
             Download-File-WebClient $url $output $Global:RefererUrl
