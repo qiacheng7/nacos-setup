@@ -1,0 +1,47 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bash-tests:
+    name: Bash Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run test suite
+        run: bash test.sh
+
+  powershell-tests:
+    name: PowerShell Syntax Check (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $errors = 0
+          Get-ChildItem -Path windows -Filter *.ps1 -Recurse | ForEach-Object {
+            $file = $_.FullName
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              Write-Host "FAIL: $file" -ForegroundColor Red
+              $parseErrors | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+              $script:errors++
+            } else {
+              Write-Host "PASS: $file" -ForegroundColor Green
+            }
+          }
+          if ($errors -gt 0) { exit 1 }
+          Write-Host "`nAll PowerShell files passed syntax check." -ForegroundColor Green
